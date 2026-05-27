@@ -1,0 +1,5 @@
+# Local environment secrets
+backend/.env
+
+# Python virtual environment
+backend/venv/
