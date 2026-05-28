@@ -124,19 +124,34 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import { Upload, Shield, Sparkles, FileText, CheckCircle, AlertTriangle, HelpCircle, ChevronDown, ChevronUp, Eye } from 'lucide-react';
-import axios from 'axios';
+import api from './api.js';
 
 // ClauseCard Component on the Right Panel
 function ClauseCard({ clause, idx, isActive, setActive }) {
   const [isOpen, setIsOpen] = useState(false);
+  const riskStyle = {
+    HIGH: 'border-red-300 bg-red-50/20 ring-red-200/40',
+    MEDIUM: 'border-yellow-300 bg-yellow-50/20 ring-yellow-200/40',
+    LOW: 'border-green-200 bg-green-50/10 ring-green-100/30',
+  };
+  const riskBadgeStyle = {
+    HIGH: 'bg-red-50 text-red-700 border-red-200',
+    MEDIUM: 'bg-yellow-50 text-yellow-700 border-yellow-200',
+    LOW: 'bg-green-50 text-green-700 border-green-200',
+  };
+  const riskIcon = {
+    HIGH: 'H',
+    MEDIUM: 'M',
+    LOW: 'L',
+  };
 
   return (
     <div 
       onClick={setActive}
       className={`border rounded-2xl p-5 shadow-sm transition-all duration-300 space-y-3 cursor-pointer ${
         isActive 
-          ? 'border-blue-400 bg-blue-50/10 ring-1 ring-blue-400/30 shadow-md' 
-          : 'border-gray-100 bg-white hover:border-gray-300'
+          ? `${riskStyle[clause.risk_level] || riskStyle.LOW} ring-1 shadow-md`
+          : `${riskStyle[clause.risk_level] || riskStyle.LOW} hover:shadow-md`
       }`}
     >
       <div className="flex justify-between items-center">
@@ -178,11 +193,14 @@ function ClauseCard({ clause, idx, isActive, setActive }) {
       </div>
 
       <div className="border-t border-dashed border-gray-100 pt-2 flex items-center justify-between text-[10px] text-gray-400">
-        <span className="flex items-center gap-1">
-          <AlertTriangle className="w-3 h-3 text-amber-500" /> 
-          Risk Status: <span className="font-semibold text-gray-500">{clause.risk_level || 'EVALUATED'}</span>
+        <span className={`flex items-center gap-1 px-2 py-0.5 rounded-full border font-semibold ${riskBadgeStyle[clause.risk_level] || riskBadgeStyle.LOW}`}>
+          {riskIcon[clause.risk_level] || 'L'} {clause.risk_level || 'LOW'} RISK
         </span>
-        <span className="font-medium text-gray-400">CUAD Engine</span>
+        {clause.risk_explanation && (
+          <span className="text-[10px] text-gray-400 italic max-w-[55%] text-right leading-tight">
+            {clause.risk_explanation}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -191,6 +209,8 @@ function ClauseCard({ clause, idx, isActive, setActive }) {
 export default function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [loadingStep, setLoadingStep] = useState('');
+  const [loadingProgress, setLoadingProgress] = useState(0);
   const [processedDoc, setProcessedDoc] = useState(null);
   const [activeClauseId, setActiveClauseId] = useState(null);
 
@@ -201,7 +221,7 @@ export default function App() {
     /* global google */
     if (typeof google !== 'undefined') {
       google.accounts.id.initialize({
-        client_id: "787483628348-u1ks9tqig785o3fvofb51l9kugqle6kk.apps.googleusercontent.com", 
+        client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID,
         callback: handleGoogleResponse,
       });
     }
@@ -219,8 +239,8 @@ export default function App() {
 
   const handleGoogleResponse = async (authResult) => {
     try {
-      const response = await axios.post('http://127.0.0.1:8000/api/auth/google/', {
-        access_token: authResult.credential
+      const response = await api.post('/api/auth/google/', {
+        access_token: authResult.credential,
       });
       localStorage.setItem('token', response.data.access);
       setUser(response.data.user);
@@ -247,29 +267,37 @@ export default function App() {
     if (!selectedFile) return;
 
     setLoading(true);
+    setLoadingStep('Reading and scrubbing document...');
+    setLoadingProgress(20);
     const formData = new FormData();
     formData.append('file', selectedFile);
 
     try {
-      const authToken = localStorage.getItem('token');
-      const response = await axios.post('http://127.0.0.1:8000/api/contracts/', formData, {
-        headers: { 
-          'Authorization': `Bearer ${authToken}`,
-          'Content-Type': 'multipart/form-data'
-        }
-      });
-      
-      // Clear out older ref tracking lists on fresh uploads
+      setLoadingStep('Running local ML classifier...');
+      setLoadingProgress(45);
+      await new Promise((r) => setTimeout(r, 400));
+
+      setLoadingStep('Sending to AI for plain-English summaries & risk scoring...');
+      setLoadingProgress(70);
       paragraphRefs.current = [];
+      const response = await api.post('/api/contracts/', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      setLoadingStep('Rendering results...');
+      setLoadingProgress(95);
+      await new Promise((r) => setTimeout(r, 200));
       setProcessedDoc(response.data);
       
       if (response.data.clauses?.length > 0) {
         setActiveClauseId(0);
       }
     } catch (err) {
-      alert("Upload failed.");
+      alert('Upload failed. Check the console for details.');
+      console.error(err);
     } finally {
       setLoading(false);
+      setLoadingStep('');
+      setLoadingProgress(0);
     }
   };
 
@@ -314,14 +342,30 @@ export default function App() {
               <span className="text-blue-600">Uncover hidden risks instantly.</span>
             </h1>
 
-            <label className={`w-full max-w-xl border-2 border-dashed border-gray-200 bg-white rounded-3xl p-10 flex flex-col items-center justify-center shadow-sm transition-all ${user ? 'cursor-pointer hover:border-blue-400' : 'opacity-70'}`}>
+            <label className={`w-full max-w-xl border-2 border-dashed border-gray-200 bg-white rounded-3xl p-10 flex flex-col items-center justify-center shadow-sm transition-all ${user && !loading ? 'cursor-pointer hover:border-blue-400' : 'opacity-70'}`}>
               <input type="file" accept=".txt,.pdf,.docx" onChange={handleFileUpload} className="hidden" disabled={!user || loading} />
-              <div className="p-4 rounded-full bg-blue-50 text-blue-600 mb-4 animate-bounce">
-                <Upload className="w-6 h-6" />
-              </div>
-              <span className="text-sm font-semibold text-gray-700">
-                {loading ? "Analyzing Machine Learning Vectors..." : "Click to select contract file"}
-              </span>
+              {loading ? (
+                <div className="flex flex-col items-center gap-4 w-full">
+                  <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                  <p className="text-sm font-semibold text-gray-700 text-center">{loadingStep}</p>
+                  <div className="w-full max-w-xs bg-gray-100 rounded-full h-1.5">
+                    <div
+                      className="bg-blue-500 h-1.5 rounded-full transition-all duration-500"
+                      style={{ width: `${loadingProgress}%` }}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="p-4 rounded-full bg-blue-50 text-blue-600 mb-4 animate-bounce">
+                    <Upload className="w-6 h-6" />
+                  </div>
+                  <span className="text-sm font-semibold text-gray-700">
+                    {user ? 'Click to select contract file' : 'Sign in to upload a contract'}
+                  </span>
+                  <span className="text-xs text-gray-400 mt-1">PDF, DOCX, or TXT</span>
+                </>
+              )}
             </label>
           </div>
         ) : (
@@ -340,9 +384,22 @@ export default function App() {
                 </button>
               </div>
               
-              <div className="flex items-center gap-2 mb-3 bg-gray-50/50 p-3 rounded-xl border border-gray-100 flex-shrink-0">
-                <FileText className="w-4 h-4 text-blue-500" />
-                <h2 className="text-xs font-bold text-gray-700 truncate max-w-xs">{processedDoc.title}</h2>
+              <div className="flex items-center justify-between mb-3 bg-gray-50/50 p-3 rounded-xl border border-gray-100 flex-shrink-0">
+                <div className="flex items-center gap-2 min-w-0">
+                  <FileText className="w-4 h-4 text-blue-500 flex-shrink-0" />
+                  <h2 className="text-xs font-bold text-gray-700 truncate">{processedDoc.title}</h2>
+                </div>
+                {processedDoc.overall_risk_score !== undefined && (
+                  <div className={`flex-shrink-0 text-[10px] font-bold px-2.5 py-1 rounded-full border ml-2 ${
+                    processedDoc.overall_risk_score >= 60
+                      ? 'bg-red-50 text-red-700 border-red-200'
+                      : processedDoc.overall_risk_score >= 30
+                      ? 'bg-yellow-50 text-yellow-700 border-yellow-200'
+                      : 'bg-green-50 text-green-700 border-green-200'
+                  }`}>
+                    Risk Score: {processedDoc.overall_risk_score}/100
+                  </div>
+                )}
               </div>
               
               <div className="flex-1 bg-gray-50/30 border border-gray-100 p-5 rounded-2xl overflow-y-auto space-y-4 shadow-inner min-h-0">
