@@ -1,4 +1,5 @@
 import os
+import json
 import joblib
 import requests
 from django.conf import settings
@@ -29,6 +30,7 @@ GEMINI_MODEL_CANDIDATES = [
     os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
     "gemini-2.0-flash",
 ]
+GEMINI_MODEL_CANDIDATES = list(dict.fromkeys([m for m in GEMINI_MODEL_CANDIDATES if m]))
 
 ai_client = None
 if GEMINI_API_KEY:
@@ -130,6 +132,132 @@ class DocumentListCreateView(generics.ListCreateAPIView):
 
         raise RuntimeError(f"All Gemini model candidates failed. Last error: {last_error}")
 
+    @staticmethod
+    def _batch_simplify_clauses(clause_data: list) -> list:
+        """
+        Sends ALL clauses to Gemini in ONE API call.
+        clause_data: [{"index": int, "category": str, "text": str}, ...]
+        Returns:     [{"index": int, "simplified": str, "risk_level": str,
+                       "risk_explanation": str}, ...]
+        """
+        if not ai_client:
+            raise RuntimeError("Gemini client is not initialized.")
+
+        prompt_lines = [
+            "You are an expert contract analyst. Below are numbered legal clauses.",
+            "For EACH clause do two things:",
+            "  1. Write a 2-3 sentence plain-English summary of the ACTUAL conditions "
+            "stated (not a generic description of the clause type).",
+            "  2. Assign a risk level: LOW, MEDIUM, or HIGH, with a one-sentence reason.",
+            "",
+            "Return ONLY a valid JSON array - no markdown, no code fences, nothing else.",
+            "Format: "
+            '[{"index":0,"simplified":"...","risk_level":"LOW","risk_explanation":"..."}, ...]',
+            "",
+            "Clauses:",
+        ]
+        for item in clause_data:
+            prompt_lines.append(
+                f'\n[{item["index"]}] Category: {item["category"]}\nText: {item["text"]}'
+            )
+
+        full_prompt = "\n".join(prompt_lines)
+        last_error = None
+        raw = ""
+
+        for candidate in GEMINI_MODEL_CANDIDATES:
+            model_name = (
+                candidate if candidate.startswith("models/") else f"models/{candidate}"
+            )
+            try:
+                response = ai_client.models.generate_content(
+                    model=model_name,
+                    contents=full_prompt,
+                )
+                raw = (response.text or "").strip()
+
+                if raw.startswith("```"):
+                    parts = raw.split("```")
+                    raw = parts[1] if len(parts) > 1 else raw
+                    if raw.lower().startswith("json"):
+                        raw = raw[4:]
+                    raw = raw.strip()
+
+                return json.loads(raw)
+
+            except json.JSONDecodeError as json_err:
+                last_error = json_err
+                print(f"Gemini JSON parse error ({model_name}): {json_err}\nRaw: {raw[:300]}")
+            except Exception as err:
+                last_error = err
+                print(f"Gemini batch attempt failed ({model_name}): {err}")
+
+        raise RuntimeError(
+            f"All Gemini model candidates failed. Last error: {last_error}"
+        )
+
+    @staticmethod
+    def _local_simplified_text(paragraph: str, category: str) -> str:
+        cleaned = " ".join((paragraph or "").split())
+        if not cleaned:
+            return f"This clause relates to {category.lower()} terms."
+
+        snippet = cleaned[:320].rstrip()
+        if len(cleaned) > 320:
+            snippet += "..."
+        return f"This clause relates to {category.lower()} terms: {snippet}"
+
+    @staticmethod
+    def _local_risk_from_clause(paragraph: str, category: str) -> tuple[str, str]:
+        text = (paragraph or "").lower()
+        category_key = (category or "").lower()
+
+        high_keywords = [
+            "unlimited liability",
+            "indemnify",
+            "indemnification",
+            "terminate immediately",
+            "sole discretion",
+            "without notice",
+            "non-compete",
+            "exclusive",
+            "penalty",
+        ]
+        medium_keywords = [
+            "auto-renew",
+            "arbitration",
+            "governing law",
+            "assignment",
+            "audit",
+            "confidential",
+            "warranty",
+            "license",
+            "ip ownership",
+            "limitation of liability",
+        ]
+
+        high_categories = {
+            "cap on liability",
+            "competitive restriction exception",
+            "termination for convenience",
+            "ip ownership assignment",
+            "exclusivity",
+        }
+        medium_categories = {
+            "governing law",
+            "anti-assignment",
+            "audit rights",
+            "insurance",
+            "license grant",
+            "revenue/profit sharing",
+        }
+
+        if any(k in text for k in high_keywords) or category_key in high_categories:
+            return "HIGH", "Potentially strict or one-sided obligations were detected."
+        if any(k in text for k in medium_keywords) or category_key in medium_categories:
+            return "MEDIUM", "Contains legal/commercial terms that require review."
+        return "LOW", "No strong high-risk indicators detected in local analysis."
+
     def create(self, request, *args, **kwargs):
         uploaded_file = request.FILES.get("file")
         if not uploaded_file:
@@ -146,52 +274,80 @@ class DocumentListCreateView(generics.ListCreateAPIView):
             )
 
             paragraphs = ContractFileParser.split_into_clauses(scrubbed_data)
-            clause_instances = []
-            gemini_disabled_reason = None
-
-            for paragraph in paragraphs:
-                if clause_model:
-                    predicted_label = clause_model.predict([paragraph])[0]
-                    print(f"ML MODEL PREDICTION: [ {predicted_label} ]")
-                else:
-                    predicted_label = "General/Unclassified"
-
-                ai_prompt = (
-                    "You are an expert contract analyst. Translate this legal paragraph string classified as a "
-                    f"'{predicted_label}' clause type into plain, clear, conversational English for a student. "
-                    "Do not give generic descriptions. Explain the actual conditions, names, requirements, or specific terms "
-                    "stated inside the sentence text. Keep it to 2 or 3 sentences max.\n"
-                    f"Text context: {paragraph}"
+            clause_data = []
+            for idx, paragraph in enumerate(paragraphs):
+                predicted_label = (
+                    clause_model.predict([paragraph])[0]
+                    if clause_model
+                    else "General/Unclassified"
+                )
+                print(f"ML MODEL PREDICTION [{idx}]: [ {predicted_label} ]")
+                clause_data.append(
+                    {"index": idx, "category": predicted_label, "text": paragraph}
                 )
 
+            ai_results = {}
+            if ai_client and clause_data:
                 try:
-                    if gemini_disabled_reason:
-                        raise RuntimeError(gemini_disabled_reason)
-                    simplified_text = self._generate_simplified_text(ai_prompt)
-                    print(f"AI SUMMARIZED: {simplified_text[:50]}...")
-                except Exception as llm_err:
-                    err_text = str(llm_err)
-                    if "RESOURCE_EXHAUSTED" in err_text:
-                        gemini_disabled_reason = "Gemini quota exhausted for this upload."
-                    print(f"GEMINI API CONNECTION ERROR: {llm_err}")
-                    simplified_text = (
-                        "This section sets out the terms regarding the "
-                        f"{predicted_label.lower()} baseline stipulations."
+                    batch_results = self._batch_simplify_clauses(clause_data)
+                    ai_results = {item["index"]: item for item in batch_results}
+                    print(
+                        f"Gemini batch call succeeded: {len(ai_results)} clauses processed."
                     )
+                except Exception as llm_err:
+                    err_str = str(llm_err)
+                    if "RESOURCE_EXHAUSTED" in err_str:
+                        print("Gemini quota exhausted - falling back to defaults.")
+                    else:
+                        print(f"Gemini batch call failed: {llm_err}")
+            else:
+                print("Gemini not available - using fallback summaries.")
+
+            valid_risk = {"LOW", "MEDIUM", "HIGH"}
+            clause_instances = []
+
+            for item in clause_data:
+                idx = item["index"]
+                ai = ai_results.get(idx, {})
+
+                simplified = ai.get(
+                    "simplified",
+                    self._local_simplified_text(item["text"], item["category"]),
+                )
+                local_risk_level, local_risk_explanation = self._local_risk_from_clause(
+                    item["text"], item["category"]
+                )
+                risk_level = ai.get("risk_level", local_risk_level).upper()
+                if risk_level not in valid_risk:
+                    risk_level = local_risk_level
+                risk_explanation = ai.get(
+                    "risk_explanation", local_risk_explanation
+                )
 
                 clause_instances.append(
                     ContractClause(
                         document=document,
-                        category=predicted_label,
-                        original_text=paragraph,
-                        simplified_text=simplified_text,
-                        risk_level="LOW",
-                        risk_explanation="Processed locally by ContractIntel.",
+                        category=item["category"],
+                        original_text=item["text"],
+                        simplified_text=simplified,
+                        risk_level=risk_level,
+                        risk_explanation=risk_explanation,
                     )
                 )
 
             if clause_instances:
                 ContractClause.objects.bulk_create(clause_instances)
+
+            risk_weights = {"LOW": 1, "MEDIUM": 2, "HIGH": 3}
+            if clause_instances:
+                total_weight = sum(
+                    risk_weights.get(c.risk_level, 1) for c in clause_instances
+                )
+                avg_weight = total_weight / len(clause_instances)
+                overall_score = int(((avg_weight - 1) / 2) * 100)
+                document.overall_risk_score = overall_score
+                document.save(update_fields=["overall_risk_score"])
+                print(f"Document overall risk score: {overall_score}/100")
 
             serializer = self.get_serializer(document)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
