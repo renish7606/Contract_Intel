@@ -123,7 +123,8 @@
 
 
 import React, { useEffect, useState, useRef } from 'react';
-import { Upload, Shield, Sparkles, FileText, CheckCircle, AlertTriangle, HelpCircle, ChevronDown, ChevronUp, Eye } from 'lucide-react';
+import { Upload, Shield, Sparkles, FileText, CheckCircle, ChevronDown, ChevronUp, Eye } from 'lucide-react';
+import { jsPDF } from 'jspdf';
 import api from './api.js';
 
 // ClauseCard Component on the Right Panel
@@ -301,6 +302,133 @@ export default function App() {
     }
   };
 
+  const clauses = processedDoc?.clauses || [];
+  const highRiskCount = clauses.filter((c) => c.risk_level === 'HIGH').length;
+  const redactionCount = (processedDoc?.scrubbed_text?.match(/\[[A-Z/_ -]+\]/g) || []).length;
+  const privacyHealthText = redactionCount > 0
+    ? `100% Secure - ${redactionCount} PII Redacted`
+    : '100% Secure - No PII tokens detected';
+
+  const handleDownloadReport = () => {
+    if (!processedDoc) return;
+
+    const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 40;
+    const contentWidth = pageWidth - margin * 2;
+    let y = margin;
+
+    const ensureSpace = (needed = 40) => {
+      if (y + needed > pageHeight - margin) {
+        doc.addPage();
+        y = margin;
+      }
+    };
+
+    const addWrapped = (text, fontSize = 11, lineGap = 15) => {
+      doc.setFontSize(fontSize);
+      const lines = doc.splitTextToSize(text || '', contentWidth);
+      lines.forEach((line) => {
+        ensureSpace(lineGap);
+        doc.text(line, margin, y);
+        y += lineGap;
+      });
+    };
+
+    // Branded cover header
+    doc.setFillColor(28, 52, 146);
+    doc.rect(0, 0, pageWidth, 90, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(20);
+    doc.text('ContractIntel', margin, 48);
+    doc.setFontSize(11);
+    doc.text('Compliance Intelligence Report', margin, 68);
+    doc.setTextColor(0, 0, 0);
+    y = 120;
+
+    const reportTitle = processedDoc.title ? `Document: ${processedDoc.title}` : 'Document: Uploaded Contract';
+    doc.setFontSize(14);
+    doc.text(reportTitle, margin, y);
+    y += 18;
+    doc.setFontSize(10);
+    doc.setTextColor(90);
+    doc.text(`Generated: ${new Date().toLocaleString()}`, margin, y);
+    doc.setTextColor(0);
+    y += 22;
+
+    // Badge strip
+    const modeText = processedDoc.analysis_mode === 'AI' ? 'AI Analysis Mode' : 'Local Analysis Mode';
+    const riskText = `Overall Risk: ${processedDoc.overall_risk_score ?? 0}/100`;
+    doc.setFillColor(238, 245, 255);
+    doc.roundedRect(margin, y - 2, 180, 22, 8, 8, 'F');
+    doc.setFontSize(10);
+    doc.setTextColor(18, 84, 182);
+    doc.text(modeText, margin + 10, y + 12);
+    doc.setFillColor(245, 250, 235);
+    doc.roundedRect(margin + 190, y - 2, 140, 22, 8, 8, 'F');
+    doc.setTextColor(27, 120, 63);
+    doc.text(riskText, margin + 200, y + 12);
+    doc.setTextColor(0);
+    y += 34;
+
+    // Executive summary card
+    doc.setFillColor(248, 250, 252);
+    doc.roundedRect(margin, y, contentWidth, 120, 10, 10, 'F');
+    doc.setFontSize(12);
+    doc.text('Executive Summary', margin + 12, y + 20);
+    const summaryLines = doc.splitTextToSize(
+      processedDoc.executive_summary || 'Summary unavailable for this document.',
+      contentWidth - 24
+    );
+    doc.setFontSize(10.5);
+    let summaryY = y + 38;
+    summaryLines.slice(0, 8).forEach((line) => {
+      doc.text(line, margin + 12, summaryY);
+      summaryY += 14;
+    });
+    y += 136;
+
+    // Metrics strip
+    doc.setFontSize(12);
+    doc.text('Overview Metrics', margin, y);
+    y += 14;
+    const metrics = [
+      `Total Clauses: ${clauses.length}`,
+      `High Risks: ${highRiskCount}`,
+      `Privacy: ${privacyHealthText}`,
+    ];
+    let mx = margin;
+    metrics.forEach((metric) => {
+      doc.setFillColor(255, 255, 255);
+      doc.setDrawColor(226, 232, 240);
+      doc.roundedRect(mx, y, 165, 34, 8, 8, 'FD');
+      doc.setFontSize(10);
+      doc.text(metric, mx + 10, y + 21);
+      mx += 175;
+    });
+    y += 52;
+
+    ensureSpace(40);
+    doc.setFontSize(12);
+    doc.text('Clause Analysis Cards', margin, y);
+    y += 16;
+
+    clauses.forEach((clause, index) => {
+      ensureSpace(70);
+      doc.setFontSize(11);
+      doc.text(`Section #${index + 1} | ${clause.category || 'General'} | ${clause.risk_level || 'LOW'} Risk`, margin, y);
+      y += 14;
+      addWrapped(`Summary: ${clause.simplified_text || 'No summary available.'}`, 10, 13);
+      if (clause.risk_explanation) {
+        addWrapped(`Reason: ${clause.risk_explanation}`, 10, 13);
+      }
+      y += 8;
+    });
+
+    doc.save('Compliance_Report.pdf');
+  };
+
   return (
     <div className="h-screen w-screen flex flex-col justify-between p-6 bg-gray-50/50 overflow-hidden font-sans">
       
@@ -369,8 +497,32 @@ export default function App() {
             </label>
           </div>
         ) : (
-          /* Split-Screen Workspace Grid */
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 h-full min-h-0 w-full items-stretch animate-in fade-in duration-200">
+          <div className="flex flex-col gap-4 h-full min-h-0 w-full animate-in fade-in duration-200">
+            <section className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+              <div className="flex items-center justify-between gap-3 mb-2">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-blue-500" />
+                  <h3 className="text-sm font-bold text-gray-800">Executive Summary</h3>
+                </div>
+                <button
+                  onClick={handleDownloadReport}
+                  className="text-[11px] font-semibold px-3 py-1.5 rounded-full border border-blue-200 text-blue-700 bg-blue-50 hover:bg-blue-100 transition-colors"
+                >
+                  Download Report
+                </button>
+              </div>
+              <div className="text-xs leading-relaxed text-gray-700 space-y-1">
+                {(processedDoc.executive_summary || 'Summary unavailable for this document.')
+                  .split('\n')
+                  .filter(Boolean)
+                  .map((line, idx) => (
+                    <p key={idx}>{line}</p>
+                  ))}
+              </div>
+            </section>
+
+          {/* Split-Screen Workspace Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 h-full min-h-0 w-full items-stretch">
             
             {/* LEFT COLUMN: Clean Document View with Autoscroll References */}
             <div className="bg-white border border-gray-100 rounded-3xl p-6 flex flex-col shadow-sm min-h-0">
@@ -439,14 +591,37 @@ export default function App() {
 
             {/* RIGHT COLUMN: Scrolling Feed of Cards */}
             <div className="flex flex-col space-y-4 overflow-y-auto pr-1 h-full min-h-0">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="bg-white border border-gray-100 rounded-2xl p-3 shadow-sm">
+                  <p className="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Total Clauses Scanned</p>
+                  <p className="mt-1 text-sm font-bold text-gray-800">{clauses.length} Sections</p>
+                </div>
+                <div className="bg-white border border-emerald-100 rounded-2xl p-3 shadow-sm">
+                  <p className="text-[10px] uppercase tracking-wider text-emerald-600 font-bold">Privacy Health Status</p>
+                  <p className="mt-1 text-xs font-semibold text-emerald-700">{privacyHealthText}</p>
+                </div>
+                <div className={`bg-white border rounded-2xl p-3 shadow-sm ${
+                  highRiskCount > 0 ? 'border-red-200' : 'border-gray-100'
+                }`}>
+                  <p className={`text-[10px] uppercase tracking-wider font-bold ${
+                    highRiskCount > 0 ? 'text-red-600' : 'text-gray-400'
+                  }`}>Risk Profile</p>
+                  <p className={`mt-1 text-sm font-bold ${
+                    highRiskCount > 0 ? 'text-red-700' : 'text-gray-800'
+                  }`}>
+                    {highRiskCount} High Risks Flagged
+                  </p>
+                </div>
+              </div>
+
               <div className="bg-white border border-gray-100 p-4 rounded-2xl flex justify-between items-center shadow-sm sticky top-0 z-10 flex-shrink-0">
                 <span className="text-[10px] font-bold text-gray-400 tracking-wider uppercase">AI Analysis Feed</span>
                 <span className="text-xs bg-blue-50 text-blue-600 font-bold px-3 py-1 rounded-full border border-blue-100/50">
-                  {processedDoc.clauses?.length || 0} Clauses Classified
+                  {clauses.length} Clauses Classified
                 </span>
               </div>
 
-              {processedDoc.clauses?.map((clause, index) => (
+              {clauses.map((clause, index) => (
                 <ClauseCard 
                   key={clause.id || index} 
                   clause={clause} 
@@ -457,6 +632,7 @@ export default function App() {
               ))}
             </div>
 
+          </div>
           </div>
         )}
       </main>

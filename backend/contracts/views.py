@@ -32,11 +32,17 @@ GEMINI_API_KEY = (
     or getattr(settings, "GOOGLE_API_KEY", None)
     or getattr(settings, "GEMINI_API_KEY", None)
 )
-GEMINI_MODEL_CANDIDATES = [
-    os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
-    "gemini-2.0-flash",
-]
-GEMINI_MODEL_CANDIDATES = list(dict.fromkeys([m for m in GEMINI_MODEL_CANDIDATES if m]))
+raw_models = (
+    os.getenv("GEMINI_MODELS", "").strip()
+    or os.getenv("GEMINI_MODEL", "").strip()
+)
+if raw_models:
+    GEMINI_MODEL_CANDIDATES = [m.strip() for m in raw_models.split(",") if m.strip()]
+else:
+    GEMINI_MODEL_CANDIDATES = ["gemini-2.5-flash-lite"]
+GEMINI_MODEL_CANDIDATES = list(dict.fromkeys(GEMINI_MODEL_CANDIDATES))
+MAX_BATCH_CLAUSES = 120
+MAX_CLAUSE_CHARS_FOR_AI = 900
 
 ai_client = None
 if genai and types and GEMINI_API_KEY:
@@ -53,6 +59,8 @@ elif not GEMINI_API_KEY:
     print("Gemini API key missing. Set GOOGLE_API_KEY or GEMINI_API_KEY.")
 else:
     print("Gemini SDK unavailable. Running in local analysis mode only.")
+
+print(f"Gemini model candidates: {GEMINI_MODEL_CANDIDATES}")
 
 MODEL_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -120,25 +128,79 @@ class DocumentListCreateView(generics.ListCreateAPIView):
         return Document.objects.filter(user=self.request.user).order_by("-created_at")
 
     @staticmethod
-    def _generate_simplified_text(prompt_text):
-        if not ai_client:
-            raise RuntimeError("Gemini client is not initialized.")
+    def _risk_rank(level: str) -> int:
+        return {"LOW": 1, "MEDIUM": 2, "HIGH": 3}.get((level or "").upper(), 1)
 
-        last_error = None
-        for candidate in GEMINI_MODEL_CANDIDATES:
-            model_name = candidate if candidate.startswith("models/") else f"models/{candidate}"
-            try:
-                response = ai_client.models.generate_content(
-                    model=model_name,
-                    contents=prompt_text,
-                )
-                if getattr(response, "text", None):
-                    return response.text.strip()
-            except Exception as err:
-                last_error = err
-                print(f"Gemini model attempt failed ({model_name}): {err}")
+    @staticmethod
+    def _category_risk_baseline(category: str) -> tuple[str, str] | None:
+        category_key = (category or "").strip().lower()
+        baseline_map = {
+            "cap on liability": ("HIGH", "Baseline risk policy: liability-cap clauses are monitored as high impact."),
+            "termination for convenience": ("HIGH", "Baseline risk policy: termination flexibility is high impact."),
+            "exclusivity": ("HIGH", "Baseline risk policy: exclusivity clauses can materially restrict operations."),
+            "competitive restriction exception": ("HIGH", "Baseline risk policy: competition restrictions are high impact."),
+            "liquidated damages": ("HIGH", "Baseline risk policy: liquidated-damages exposure is high impact."),
+            "governing law": ("MEDIUM", "Baseline risk policy: governing-law clauses require legal review."),
+            "anti-assignment": ("MEDIUM", "Baseline risk policy: assignment constraints require review."),
+            "audit rights": ("MEDIUM", "Baseline risk policy: audit-rights clauses require review."),
+            "insurance": ("MEDIUM", "Baseline risk policy: insurance terms require coverage review."),
+            "license grant": ("MEDIUM", "Baseline risk policy: licensing scope and limits require review."),
+            "ip ownership assignment": ("HIGH", "Baseline risk policy: IP ownership transfer is high impact."),
+            "revenue/profit sharing": ("MEDIUM", "Baseline risk policy: revenue-sharing clauses need commercial review."),
+        }
+        return baseline_map.get(category_key)
 
-        raise RuntimeError(f"All Gemini model candidates failed. Last error: {last_error}")
+    @staticmethod
+    def _generate_executive_summary(title: str, scrubbed_text: str, clauses: list, overall_score: int) -> str:
+        text = " ".join((scrubbed_text or "").split())
+        preview = text[:2500]
+
+        document_type = "Contract"
+        title_lower = (title or "").lower()
+        if "nda" in title_lower:
+            document_type = "Non-Disclosure Agreement"
+        elif "service" in title_lower:
+            document_type = "Service Agreement"
+        elif "power" in title_lower and "attorney" in title_lower:
+            document_type = "Power of Attorney"
+
+        parties_match = re.search(
+            r"\bbetween\s+(.{3,140}?)\s+and\s+(.{3,140}?)(?:,|\.|;|\n)",
+            preview,
+            flags=re.IGNORECASE,
+        )
+        if parties_match:
+            party_a = parties_match.group(1).strip()
+            party_b = parties_match.group(2).strip()
+            parties_line = f"The agreement appears to be between {party_a} and {party_b}."
+        else:
+            parties_line = "The contracting parties are defined in the opening clauses."
+
+        categories = [c.get("category", "General/Unclassified") for c in clauses]
+        top_categories = []
+        for cat in categories:
+            if cat not in top_categories:
+                top_categories.append(cat)
+            if len(top_categories) == 3:
+                break
+        purpose_line = (
+            f"It mainly covers {', '.join(top_categories)} terms."
+            if top_categories
+            else "It defines core legal rights, obligations, and governance terms."
+        )
+
+        risk_band = "low"
+        if overall_score >= 60:
+            risk_band = "high"
+        elif overall_score >= 30:
+            risk_band = "moderate"
+        risk_line = (
+            f"Overall risk profile is {risk_band} (score: {overall_score}/100), "
+            "so priority clauses should be reviewed first."
+        )
+
+        intro_line = f"This document is a {document_type} outlining legal and commercial obligations."
+        return "\n".join([intro_line, parties_line, purpose_line, risk_line])
 
     @staticmethod
     def _batch_simplify_clauses(clause_data: list) -> list:
@@ -203,6 +265,28 @@ class DocumentListCreateView(generics.ListCreateAPIView):
         raise RuntimeError(
             f"All Gemini model candidates failed. Last error: {last_error}"
         )
+
+    @staticmethod
+    def _prepare_clause_batch_payload(clause_data: list) -> tuple[list, int]:
+        """
+        Keep the upload as one Gemini request while reducing prompt/token pressure.
+        Returns the compacted clause list and count of truncated clauses.
+        """
+        compact = []
+        truncated_count = 0
+        for item in clause_data[:MAX_BATCH_CLAUSES]:
+            text = " ".join((item.get("text") or "").split())
+            if len(text) > MAX_CLAUSE_CHARS_FOR_AI:
+                text = f"{text[:MAX_CLAUSE_CHARS_FOR_AI].rstrip()}..."
+                truncated_count += 1
+            compact.append(
+                {
+                    "index": item["index"],
+                    "category": item["category"],
+                    "text": text,
+                }
+            )
+        return compact, truncated_count
 
     @staticmethod
     def _local_simplified_text(paragraph: str, category: str) -> str:
@@ -392,7 +476,19 @@ class DocumentListCreateView(generics.ListCreateAPIView):
             analysis_mode = "LOCAL_FALLBACK"
             if ai_client and clause_data:
                 try:
-                    batch_results = self._batch_simplify_clauses(clause_data)
+                    compact_clause_data, truncated_count = self._prepare_clause_batch_payload(clause_data)
+                    if len(clause_data) > MAX_BATCH_CLAUSES:
+                        print(
+                            f"Batch capped to {MAX_BATCH_CLAUSES} clauses for AI call "
+                            f"(total clauses: {len(clause_data)})."
+                        )
+                    if truncated_count:
+                        print(
+                            f"AI batch payload compacted: {truncated_count} clause(s) truncated "
+                            f"to {MAX_CLAUSE_CHARS_FOR_AI} chars."
+                        )
+
+                    batch_results = self._batch_simplify_clauses(compact_clause_data)
                     ai_results = {item["index"]: item for item in batch_results}
                     analysis_mode = "AI"
                     print(
@@ -427,6 +523,12 @@ class DocumentListCreateView(generics.ListCreateAPIView):
                 risk_explanation = ai.get(
                     "risk_explanation", local_risk_explanation
                 )
+                baseline = self._category_risk_baseline(item["category"])
+                if baseline:
+                    baseline_level, baseline_explanation = baseline
+                    if self._risk_rank(baseline_level) > self._risk_rank(risk_level):
+                        risk_level = baseline_level
+                        risk_explanation = baseline_explanation
 
                 clause_instances.append(
                     ContractClause(
@@ -458,7 +560,14 @@ class DocumentListCreateView(generics.ListCreateAPIView):
                 document.save(update_fields=["analysis_mode"])
 
             serializer = self.get_serializer(document)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            response_data = dict(serializer.data)
+            response_data["executive_summary"] = self._generate_executive_summary(
+                title=uploaded_file.name,
+                scrubbed_text=scrubbed_data,
+                clauses=clause_data,
+                overall_score=document.overall_risk_score or 0,
+            )
+            return Response(response_data, status=status.HTTP_201_CREATED)
 
         except Exception as err:
             print(f"System core processing failure: {err}")

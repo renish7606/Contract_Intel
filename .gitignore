@@ -3,3 +3,7 @@ backend/.env
 
 # Python virtual environment
 backend/venv/
+
+# Python cache/build artifacts
+__pycache__/
+*.py[cod]
