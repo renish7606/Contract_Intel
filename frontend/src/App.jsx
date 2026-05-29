@@ -217,6 +217,7 @@ export default function App() {
 
   // 🔥 NEW REF: Stores references to all left side text paragraphs dynamically
   const paragraphRefs = useRef([]);
+  const analysisCardRefs = useRef([]);
 
   useEffect(() => {
     /* global google */
@@ -234,6 +235,12 @@ export default function App() {
       paragraphRefs.current[activeClauseId].scrollIntoView({
         behavior: 'smooth',
         block: 'nearest', // Centers or brings it cleanly into view without moving the whole page layout
+      });
+    }
+    if (activeClauseId !== null && analysisCardRefs.current[activeClauseId]) {
+      analysisCardRefs.current[activeClauseId].scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
       });
     }
   }, [activeClauseId]);
@@ -281,6 +288,7 @@ export default function App() {
       setLoadingStep('Sending to AI for plain-English summaries & risk scoring...');
       setLoadingProgress(70);
       paragraphRefs.current = [];
+      analysisCardRefs.current = [];
       const response = await api.post('/api/contracts/', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
@@ -430,7 +438,7 @@ export default function App() {
   };
 
   return (
-    <div className="h-screen w-screen flex flex-col justify-between p-6 bg-gray-50/50 overflow-hidden font-sans">
+    <div className="min-h-screen w-full flex flex-col p-6 bg-gray-50/50 overflow-x-hidden font-sans">
       
       {/* Header Navigation */}
       <header className="max-w-7xl w-full mx-auto flex justify-between items-center bg-white border border-gray-100 px-6 py-4 rounded-2xl shadow-sm flex-shrink-0">
@@ -457,7 +465,7 @@ export default function App() {
       </header>
 
       {/* Primary Workspace Box */}
-      <main className="w-full max-w-7xl mx-auto flex-1 flex flex-col justify-center my-6 min-h-0">
+      <main className="w-full max-w-7xl mx-auto flex-1 flex flex-col justify-start my-6 min-h-0">
         {!processedDoc ? (
           <div className="max-w-4xl w-full mx-auto flex flex-col items-center text-center space-y-8">
             <div className="bg-blue-50 text-blue-600 border border-blue-100/50 px-3 py-1 rounded-full text-xs font-medium flex items-center gap-1.5 shadow-sm">
@@ -522,10 +530,10 @@ export default function App() {
             </section>
 
           {/* Split-Screen Workspace Grid */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 h-full min-h-0 w-full items-stretch">
+          <div className="grid grid-cols-1 lg:grid-cols-[1.05fr_1.25fr] gap-8 flex-1 min-h-0 w-full items-stretch lg:h-[72vh]">
             
             {/* LEFT COLUMN: Clean Document View with Autoscroll References */}
-            <div className="bg-white border border-gray-100 rounded-3xl p-6 flex flex-col shadow-sm min-h-0">
+            <div className="bg-white border border-gray-100 rounded-3xl p-6 flex flex-col shadow-sm min-h-[620px] lg:min-h-0 lg:h-full">
               <div className="flex justify-between items-center border-b border-gray-100 pb-4 mb-4 flex-shrink-0">
                 <div className="flex items-center gap-2 text-green-600 font-semibold text-xs">
                   <CheckCircle className="w-4 h-4" />
@@ -567,7 +575,7 @@ export default function App() {
                 </div>
               </div>
               
-              <div className="flex-1 bg-gray-50/30 border border-gray-100 p-5 rounded-2xl overflow-y-auto space-y-4 shadow-inner min-h-0">
+              <div className="flex-1 bg-gray-50/30 border border-gray-100 p-5 rounded-2xl overflow-y-auto space-y-4 shadow-inner min-h-[480px] lg:min-h-0">
                 {processedDoc.clauses?.map((clause, index) => {
                   const isHighlighted = activeClauseId === index;
                   return (
@@ -590,7 +598,7 @@ export default function App() {
             </div>
 
             {/* RIGHT COLUMN: Scrolling Feed of Cards */}
-            <div className="flex flex-col space-y-4 overflow-y-auto pr-1 h-full min-h-0">
+            <div className="flex flex-col space-y-4 overflow-y-auto pr-1 min-h-[620px] lg:min-h-0 lg:h-full">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="bg-white border border-gray-100 rounded-2xl p-3 shadow-sm">
                   <p className="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Total Clauses Scanned</p>
@@ -622,13 +630,14 @@ export default function App() {
               </div>
 
               {clauses.map((clause, index) => (
-                <ClauseCard 
-                  key={clause.id || index} 
-                  clause={clause} 
-                  idx={index} 
-                  isActive={activeClauseId === index}
-                  setActive={() => setActiveClauseId(index)}
-                />
+                <div key={clause.id || index} ref={(el) => (analysisCardRefs.current[index] = el)}>
+                  <ClauseCard 
+                    clause={clause} 
+                    idx={index} 
+                    isActive={activeClauseId === index}
+                    setActive={() => setActiveClauseId(index)}
+                  />
+                </div>
               ))}
             </div>
 
@@ -638,7 +647,7 @@ export default function App() {
       </main>
 
       {/* Footer */}
-      <footer className="text-center text-xs text-gray-400 border-t border-gray-100 pt-4 max-w-7xl w-full mx-auto flex-shrink-0">
+      <footer className="text-center text-xs text-gray-400 border-t border-gray-100 pt-4 pb-2 mt-2 max-w-7xl w-full mx-auto flex-shrink-0">
         &copy; {new Date().getFullYear()} ContractIntel. Zero logs. Complete PII compliance.
       </footer>
     </div>
