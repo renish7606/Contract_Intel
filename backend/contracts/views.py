@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import joblib
 import requests
 from django.conf import settings
@@ -10,8 +11,13 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from google import genai
-from google.genai import types
+try:
+    from google import genai
+    from google.genai import types
+except Exception as genai_import_err:
+    genai = None
+    types = None
+    print(f"Google GenAI SDK import unavailable: {genai_import_err}")
 
 from .models import ContractClause, Document
 from .parser import ContractFileParser
@@ -33,7 +39,7 @@ GEMINI_MODEL_CANDIDATES = [
 GEMINI_MODEL_CANDIDATES = list(dict.fromkeys([m for m in GEMINI_MODEL_CANDIDATES if m]))
 
 ai_client = None
-if GEMINI_API_KEY:
+if genai and types and GEMINI_API_KEY:
     try:
         # Force stable API routing instead of default v1beta.
         ai_client = genai.Client(
@@ -43,8 +49,10 @@ if GEMINI_API_KEY:
         print("GenAI client initialized on API v1.")
     except Exception as gemini_init_err:
         print(f"Gemini client initialization failed: {gemini_init_err}")
-else:
+elif not GEMINI_API_KEY:
     print("Gemini API key missing. Set GOOGLE_API_KEY or GEMINI_API_KEY.")
+else:
+    print("Gemini SDK unavailable. Running in local analysis mode only.")
 
 MODEL_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -202,10 +210,85 @@ class DocumentListCreateView(generics.ListCreateAPIView):
         if not cleaned:
             return f"This clause relates to {category.lower()} terms."
 
-        snippet = cleaned[:320].rstrip()
-        if len(cleaned) > 320:
-            snippet += "..."
-        return f"This clause relates to {category.lower()} terms: {snippet}"
+        sentence_candidates = [
+            s.strip()
+            for s in re.split(r"(?<=[.!?])\s+", cleaned)
+            if s and len(s.strip()) > 20
+        ]
+        if not sentence_candidates:
+            sentence_candidates = [cleaned]
+
+        priority_terms = {
+            "shall", "must", "terminate", "liability", "indemnify", "indemnification",
+            "penalty", "exclusive", "confidential", "governing law", "assignment",
+            "audit", "warranty", "notice", "license",
+        }
+        top_sentences = []
+        scored = []
+        for sentence in sentence_candidates:
+            sentence_l = sentence.lower()
+            keyword_hits = sum(1 for term in priority_terms if term in sentence_l)
+            length_bonus = 1 if 60 <= len(sentence) <= 220 else 0
+            score = (keyword_hits * 3) + length_bonus
+            scored.append((score, sentence))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        for _, sentence in scored:
+            if len(top_sentences) >= 2:
+                break
+            if sentence not in top_sentences:
+                top_sentences.append(sentence)
+
+        summary = " ".join(top_sentences).strip()
+        if len(summary) > 260:
+            summary = f"{summary[:257].rstrip()}..."
+
+        # Make local summary less verbatim and more plain-English.
+        replacements = [
+            ("hereinafter", "later in this document"),
+            ("whereas", ""),
+            ("shall", "must"),
+            ("thereof", "of it"),
+            ("therein", "in it"),
+            ("witnesseth", "states"),
+            ("party of the first part", "first party"),
+            ("party of the second part", "second party"),
+        ]
+        normalized = summary
+        for source, target in replacements:
+            normalized = re.sub(rf"\b{re.escape(source)}\b", target, normalized, flags=re.IGNORECASE)
+        normalized = " ".join(normalized.split()).strip(" ,.;:")
+
+        # If still too similar to original, compress harder to a conceptual sentence.
+        original_tokens = cleaned.lower().split()
+        normalized_tokens = normalized.lower().split()
+        overlap = 0
+        if normalized_tokens:
+            original_set = set(original_tokens)
+            overlap = sum(1 for tok in normalized_tokens if tok in original_set) / len(normalized_tokens)
+
+        if overlap > 0.82:
+            key_actions = []
+            text_l = cleaned.lower()
+            if "terminate" in text_l:
+                key_actions.append("termination conditions")
+            if "payment" in text_l or "fee" in text_l:
+                key_actions.append("payment obligations")
+            if "liability" in text_l or "indemn" in text_l:
+                key_actions.append("liability and indemnity exposure")
+            if "confidential" in text_l:
+                key_actions.append("confidentiality duties")
+            if "governing law" in text_l or "jurisdiction" in text_l:
+                key_actions.append("legal venue and governing law")
+            if not key_actions:
+                key_actions.append("core rights and obligations")
+
+            normalized = (
+                f"This clause explains {', '.join(key_actions)} under the "
+                f"{category.lower()} section."
+            )
+
+        return f"This clause relates to {category.lower()} terms. {normalized}"
 
     @staticmethod
     def _local_risk_from_clause(paragraph: str, category: str) -> tuple[str, str]:
@@ -252,10 +335,29 @@ class DocumentListCreateView(generics.ListCreateAPIView):
             "revenue/profit sharing",
         }
 
-        if any(k in text for k in high_keywords) or category_key in high_categories:
-            return "HIGH", "Potentially strict or one-sided obligations were detected."
-        if any(k in text for k in medium_keywords) or category_key in medium_categories:
-            return "MEDIUM", "Contains legal/commercial terms that require review."
+        matched_high_keyword = next((k for k in high_keywords if k in text), None)
+        matched_medium_keyword = next((k for k in medium_keywords if k in text), None)
+
+        if matched_high_keyword:
+            return (
+                "HIGH",
+                f"Local trigger matched high-risk keyword: '{matched_high_keyword}'.",
+            )
+        if category_key in high_categories:
+            return (
+                "HIGH",
+                f"Local trigger matched high-risk clause category: '{category}'.",
+            )
+        if matched_medium_keyword:
+            return (
+                "MEDIUM",
+                f"Local trigger matched medium-risk keyword: '{matched_medium_keyword}'.",
+            )
+        if category_key in medium_categories:
+            return (
+                "MEDIUM",
+                f"Local trigger matched medium-risk clause category: '{category}'.",
+            )
         return "LOW", "No strong high-risk indicators detected in local analysis."
 
     def create(self, request, *args, **kwargs):
@@ -287,10 +389,12 @@ class DocumentListCreateView(generics.ListCreateAPIView):
                 )
 
             ai_results = {}
+            analysis_mode = "LOCAL_FALLBACK"
             if ai_client and clause_data:
                 try:
                     batch_results = self._batch_simplify_clauses(clause_data)
                     ai_results = {item["index"]: item for item in batch_results}
+                    analysis_mode = "AI"
                     print(
                         f"Gemini batch call succeeded: {len(ai_results)} clauses processed."
                     )
@@ -346,8 +450,12 @@ class DocumentListCreateView(generics.ListCreateAPIView):
                 avg_weight = total_weight / len(clause_instances)
                 overall_score = int(((avg_weight - 1) / 2) * 100)
                 document.overall_risk_score = overall_score
-                document.save(update_fields=["overall_risk_score"])
                 print(f"Document overall risk score: {overall_score}/100")
+            document.analysis_mode = analysis_mode
+            if clause_instances:
+                document.save(update_fields=["overall_risk_score", "analysis_mode"])
+            else:
+                document.save(update_fields=["analysis_mode"])
 
             serializer = self.get_serializer(document)
             return Response(serializer.data, status=status.HTTP_201_CREATED)

@@ -15,4 +15,12 @@ class DocumentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Document
-        fields = ['id', 'title', 'scrubbed_text', 'created_at', 'overall_risk_score', 'clauses']
+        fields = [
+            'id',
+            'title',
+            'scrubbed_text',
+            'created_at',
+            'overall_risk_score',
+            'analysis_mode',
+            'clauses',
+        ]

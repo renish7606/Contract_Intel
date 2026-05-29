@@ -389,17 +389,30 @@ export default function App() {
                   <FileText className="w-4 h-4 text-blue-500 flex-shrink-0" />
                   <h2 className="text-xs font-bold text-gray-700 truncate">{processedDoc.title}</h2>
                 </div>
-                {processedDoc.overall_risk_score !== undefined && (
-                  <div className={`flex-shrink-0 text-[10px] font-bold px-2.5 py-1 rounded-full border ml-2 ${
-                    processedDoc.overall_risk_score >= 60
-                      ? 'bg-red-50 text-red-700 border-red-200'
-                      : processedDoc.overall_risk_score >= 30
-                      ? 'bg-yellow-50 text-yellow-700 border-yellow-200'
-                      : 'bg-green-50 text-green-700 border-green-200'
-                  }`}>
-                    Risk Score: {processedDoc.overall_risk_score}/100
-                  </div>
-                )}
+                <div className="flex items-center gap-2 ml-2">
+                  {processedDoc.analysis_mode && (
+                    <div className={`flex-shrink-0 text-[10px] font-semibold px-2 py-1 rounded-full border ${
+                      processedDoc.analysis_mode === 'AI'
+                        ? 'bg-blue-50 text-blue-700 border-blue-200'
+                        : 'bg-amber-50 text-amber-700 border-amber-200'
+                    }`}>
+                      {processedDoc.analysis_mode === 'AI'
+                        ? 'AI Analysis Mode'
+                        : 'Local Analysis Mode (AI unavailable)'}
+                    </div>
+                  )}
+                  {processedDoc.overall_risk_score !== undefined && (
+                    <div className={`flex-shrink-0 text-[10px] font-bold px-2.5 py-1 rounded-full border ${
+                      processedDoc.overall_risk_score >= 60
+                        ? 'bg-red-50 text-red-700 border-red-200'
+                        : processedDoc.overall_risk_score >= 30
+                        ? 'bg-yellow-50 text-yellow-700 border-yellow-200'
+                        : 'bg-green-50 text-green-700 border-green-200'
+                    }`}>
+                      Risk Score: {processedDoc.overall_risk_score}/100
+                    </div>
+                  )}
+                </div>
               </div>
               
               <div className="flex-1 bg-gray-50/30 border border-gray-100 p-5 rounded-2xl overflow-y-auto space-y-4 shadow-inner min-h-0">
