@@ -92,6 +92,7 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",  # Standard Vite-React development port
     "http://localhost:3000",
+    "https://.vercel.app",
 ]
 
 ROOT_URLCONF = 'core.urls'
@@ -117,12 +118,22 @@ WSGI_APPLICATION = 'core.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
+
+
+# ✅ PASTE THIS NEW PROD-READY BLOCK:
 DATABASES = {
     'default': dj_database_url.config(
         default=f"postgresql://{os.getenv('DB_USER','postgres')}:{os.getenv('DB_PASSWORD','')}@{os.getenv('DB_HOST','localhost')}:{os.getenv('DB_PORT','5432')}/{os.getenv('DB_NAME','contractintel_db')}",
         conn_max_age=600,
     )
 }
+
+# Enforce SSL connections strictly when running live on Render
+if os.getenv('DATABASE_URL'):
+    DATABASES['default']['OPTIONS'] = {
+        'sslmode': 'require'
+    }
+
 
 
 # Password validation
