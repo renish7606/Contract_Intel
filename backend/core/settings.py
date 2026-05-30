@@ -120,18 +120,32 @@ WSGI_APPLICATION = 'core.wsgi.application'
 
 
 
-# ✅ PASTE THIS NEW PROD-READY BLOCK:
-DATABASES = {
-    'default': dj_database_url.config(
-        default=f"postgresql://{os.getenv('DB_USER','postgres')}:{os.getenv('DB_PASSWORD','')}@{os.getenv('DB_HOST','localhost')}:{os.getenv('DB_PORT','5432')}/{os.getenv('DB_NAME','contractintel_db')}",
-        conn_max_age=600,
-    )
-}
+# Database
+# https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-# Enforce SSL connections strictly when running live on Render
 if os.getenv('DATABASE_URL'):
+    # 🚀 RUNNING LIVE ON RENDER: Parse the direct connection string automatically
+    DATABASES = {
+        'default': dj_database_url.config(
+            default=os.getenv('DATABASE_URL'),
+            conn_max_age=600,
+        )
+    }
+    # Secure Render PostgreSQL SSL connection requirements
     DATABASES['default']['OPTIONS'] = {
         'sslmode': 'require'
+    }
+else:
+    # 💻 RUNNING LOCALLY ON YOUR COMPUTER: Clean fallback configuration
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': 'contractintel_db',
+            'USER': 'postgres',
+            'PASSWORD': '',  # Safe empty local password string
+            'HOST': 'localhost',
+            'PORT': '5432',
+        }
     }
 
 
