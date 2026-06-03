@@ -222,3 +222,5 @@ ALLOWED_HOSTS = [
     '127.0.0.1',
     '.onrender.com',
 ]
+
+CORS_ALLOW_ALL_ORIGINS = True
