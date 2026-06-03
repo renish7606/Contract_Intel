@@ -78,11 +78,11 @@ class GoogleLoginView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        token = request.data.get('token') or request.data.get('access_token')
-        if not token:
+        access_token = request.data.get("access_token")
+        if not access_token:
             return Response({"error": "Token is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-        google_verify_url = f"https://www.googleapis.com/oauth2/v3/tokeninfo?id_token={token}"
+        google_verify_url = f"https://www.googleapis.com/oauth2/v3/tokeninfo?id_token={access_token}"
         response = requests.get(google_verify_url)
 
         if response.status_code != 200:
