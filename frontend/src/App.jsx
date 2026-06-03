@@ -245,15 +245,22 @@ export default function App() {
     }
   }, [activeClauseId]);
 
-  const handleGoogleResponse = async (authResult) => {
+  const handleGoogleSuccess = async (credentialResponse) => {
     try {
-      const response = await api.post('/api/auth/google/', {
-        access_token: authResult.credential,
+      const tokenPayload = credentialResponse.credential;
+    
+      // Send both 'token' and 'access_token' so the backend gets exactly what it expects!
+      const res = await axios.post(`${API_BASE_URL}/api/auth/google/`, { 
+        token: tokenPayload,
+        access_token: tokenPayload 
       });
-      localStorage.setItem('token', response.data.access);
-      setUser(response.data.user);
-    } catch (error) {
-      console.error(error);
+
+      if (res.data.access) {
+        localStorage.setItem('token', res.data.access);
+        // Update your auth state here (e.g., setUser(res.data.user))
+      }
+    } catch (err) {
+      console.error("Login verification failed:", err.message);
     }
   };
 
