@@ -10,6 +10,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 try:
     from google import genai
@@ -41,8 +42,8 @@ if raw_models:
 else:
     GEMINI_MODEL_CANDIDATES = ["gemini-2.5-flash-lite"]
 GEMINI_MODEL_CANDIDATES = list(dict.fromkeys(GEMINI_MODEL_CANDIDATES))
-MAX_BATCH_CLAUSES = 120
-MAX_CLAUSE_CHARS_FOR_AI = 900
+MAX_BATCH_CLAUSES = 25
+MAX_CLAUSE_CHARS_FOR_AI = 350
 
 ai_client = None
 if genai and types and GEMINI_API_KEY:
@@ -488,18 +489,28 @@ class DocumentListCreateView(generics.ListCreateAPIView):
                             f"to {MAX_CLAUSE_CHARS_FOR_AI} chars."
                         )
 
-                    batch_results = self._batch_simplify_clauses(compact_clause_data)
-                    ai_results = {item["index"]: item for item in batch_results}
-                    analysis_mode = "AI"
-                    print(
-                        f"Gemini batch call succeeded: {len(ai_results)} clauses processed."
-                    )
-                except Exception as llm_err:
-                    err_str = str(llm_err)
-                    if "RESOURCE_EXHAUSTED" in err_str:
-                        print("Gemini quota exhausted - falling back to defaults.")
-                    else:
-                        print(f"Gemini batch call failed: {llm_err}")
+                    # ── Hard 18-second timeout so Render's 30s proxy limit is never hit ──
+                    with ThreadPoolExecutor(max_workers=1) as executor:
+                        future = executor.submit(
+                            self._batch_simplify_clauses, compact_clause_data
+                        )
+                        try:
+                            batch_results = future.result(timeout=18)
+                            ai_results = {item["index"]: item for item in batch_results}
+                            analysis_mode = "AI"
+                            print(
+                                f"Gemini batch call succeeded: {len(ai_results)} clauses processed."
+                            )
+                        except FuturesTimeoutError:
+                            print("Gemini call exceeded 18s timeout — falling back to local analysis.")
+                        except Exception as llm_err:
+                            err_str = str(llm_err)
+                            if "RESOURCE_EXHAUSTED" in err_str:
+                                print("Gemini quota exhausted — falling back to local analysis.")
+                            else:
+                                print(f"Gemini batch call failed: {llm_err}")
+                except Exception as outer_err:
+                    print(f"AI processing setup failed: {outer_err}")
             else:
                 print("Gemini not available - using fallback summaries.")
 
