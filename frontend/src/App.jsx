@@ -231,19 +231,32 @@ export default function App() {
 
   // 🔥 NEW EFFECT: Auto-scrolls the left panel whenever activeClauseId changes
   useEffect(() => {
-    if (activeClauseId !== null && paragraphRefs.current[activeClauseId]) {
-      paragraphRefs.current[activeClauseId].scrollIntoView({
-        behavior: 'smooth',
-        block: 'nearest', // Centers or brings it cleanly into view without moving the whole page layout
+    // ─── 1. Wake up the Render backend immediately (free tier cold start) ───
+    const BACKEND = import.meta.env.VITE_API_URL || 'https://contract-intel-eeca.onrender.com';
+    fetch(`${BACKEND}/api/auth/google/`, { method: 'OPTIONS' }).catch(() => {});
+
+    // ─── 2. Load Google GSI script dynamically so we control the onload ────
+    //    The old approach checked `typeof google !== 'undefined'` in useEffect,
+    //    but the async script often loads AFTER the effect runs, so initialize()
+    //    was never called and no callback was ever registered.
+    const script = document.createElement('script');
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.defer = true;
+    script.onload = () => {
+      /* global google */
+      google.accounts.id.initialize({
+        client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID,
+        callback: handleGoogleResponse,
       });
-    }
-    if (activeClauseId !== null && analysisCardRefs.current[activeClauseId]) {
-      analysisCardRefs.current[activeClauseId].scrollIntoView({
-        behavior: 'smooth',
-        block: 'nearest',
-      });
-    }
-  }, [activeClauseId]);
+    };
+    document.head.appendChild(script);
+
+    return () => {
+      const existing = document.querySelector('script[src="https://accounts.google.com/gsi/client"]');
+      if (existing) existing.remove();
+    };
+  }, []);
 
   const handleGoogleResponse = async (authResult) => {
     try {
