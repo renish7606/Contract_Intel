@@ -220,25 +220,17 @@ export default function App() {
   const analysisCardRefs = useRef([]);
 
   useEffect(() => {
-    /* global google */
-    if (typeof google !== 'undefined') {
-      google.accounts.id.initialize({
-        client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID,
-        callback: handleGoogleResponse,
-      });
-    }
-  }, []);
+    const BACKEND = import.meta.env.VITE_API_URL || 'https://contract-intel.onrender.com';
 
-  // 🔥 NEW EFFECT: Auto-scrolls the left panel whenever activeClauseId changes
-  useEffect(() => {
-    // ─── 1. Wake up the Render backend immediately (free tier cold start) ───
-    const BACKEND = import.meta.env.VITE_API_URL || 'https://contract-intel-eeca.onrender.com';
-    fetch(`${BACKEND}/api/auth/google/`, { method: 'OPTIONS' }).catch(() => {});
+    // ─── Wake up backend immediately on page load ───
+    fetch(`${BACKEND}/health/`).catch(() => {});
 
-    // ─── 2. Load Google GSI script dynamically so we control the onload ────
-    //    The old approach checked `typeof google !== 'undefined'` in useEffect,
-    //    but the async script often loads AFTER the effect runs, so initialize()
-    //    was never called and no callback was ever registered.
+    // ─── Keep backend alive every 4 minutes (Render sleeps at 15min) ───
+    const keepAlive = setInterval(() => {
+      fetch(`${BACKEND}/health/`).catch(() => {});
+    }, 4 * 60 * 1000);
+
+    // ─── Load Google GSI script dynamically (fixes race condition) ───
     const script = document.createElement('script');
     script.src = 'https://accounts.google.com/gsi/client';
     script.async = true;
@@ -253,6 +245,7 @@ export default function App() {
     document.head.appendChild(script);
 
     return () => {
+      clearInterval(keepAlive);
       const existing = document.querySelector('script[src="https://accounts.google.com/gsi/client"]');
       if (existing) existing.remove();
     };
