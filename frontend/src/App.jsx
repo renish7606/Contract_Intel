@@ -280,6 +280,19 @@ export default function App() {
     const selectedFile = event.target.files[0];
     if (!selectedFile) return;
 
+    // Validate file size (max 5MB for free tier)
+    if (selectedFile.size > 5 * 1024 * 1024) {
+      alert('File too large. Please upload a document under 5MB.');
+      return;
+    }
+
+  // Validate file type
+  const allowed = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'text/plain'];
+  if (!allowed.includes(selectedFile.type)) {
+    alert('Unsupported file type. Please upload a PDF, DOCX, or TXT file.');
+    return;
+  }
+
     setLoading(true);
     setLoadingStep('Reading and scrubbing document...');
     setLoadingProgress(20);
