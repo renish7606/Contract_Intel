@@ -92,7 +92,6 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",  # Standard Vite-React development port
     "http://localhost:3000",
-    "https://.vercel.app",
     "https://contract-intel-omega.vercel.app",  # Your main Vercel domain
     "https://contract-intel-c4wibwikc-renishpatel1717-9029s-projects.vercel.app",  # Your preview Vercel domain
 ]
