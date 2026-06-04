@@ -25,6 +25,12 @@ Upload a contract. Get a risk-scored, plain-English breakdown. Download a compli
 
 ---
 
+## 🚀 Live Demo
+
+Experience the live application here: [ContractIntel Live App](https://contract-intel-omega.vercel.app/)
+
+---
+
 ## Screenshots
 
 ### Landing Page
