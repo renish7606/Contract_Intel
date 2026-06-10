@@ -240,6 +240,7 @@ export default function App() {
       google.accounts.id.initialize({
         client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID,
         callback: handleGoogleResponse,
+        use_fedcm_for_prompt: false,
       });
     };
     document.head.appendChild(script);
@@ -265,7 +266,25 @@ export default function App() {
 
   const triggerGooglePopup = () => {
     if (typeof google !== 'undefined') {
-      google.accounts.id.prompt();
+      // Re-initialize every time to bypass Google's prompt suppression
+      google.accounts.id.initialize({
+        client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID,
+        callback: handleGoogleResponse,
+        use_fedcm_for_prompt: false,
+      });
+      google.accounts.id.prompt((notification) => {
+        if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
+          // Prompt was suppressed — open Google sign-in in a popup window
+          const w = 500, h = 600;
+          const left = window.screenX + (window.outerWidth - w) / 2;
+          const top = window.screenY + (window.outerHeight - h) / 2;
+          window.open(
+            `https://accounts.google.com/o/oauth2/v2/auth?client_id=${import.meta.env.VITE_GOOGLE_CLIENT_ID}&response_type=token&scope=email%20profile`,
+            'googleSignIn',
+            `width=${w},height=${h},left=${left},top=${top}`
+          );
+        }
+      });
     }
   };
 
@@ -274,6 +293,10 @@ export default function App() {
     setUser(null);
     setProcessedDoc(null);
     setActiveClauseId(null);
+    // Reset Google's internal state so prompt shows again next time
+    if (typeof google !== 'undefined') {
+      google.accounts.id.disableAutoSelect();
+    }
   };
 
   const handleFileUpload = async (event) => {
@@ -460,25 +483,26 @@ export default function App() {
     <div className="min-h-screen w-full flex flex-col p-6 bg-gray-50/50 overflow-x-hidden font-sans">
       
       {/* Header Navigation */}
-      <header className="max-w-7xl w-full mx-auto flex justify-between items-center bg-white border border-gray-100 px-6 py-4 rounded-2xl shadow-sm flex-shrink-0">
-        <div className="flex items-center gap-2 font-bold text-xl">
+      <header className="max-w-7xl w-full mx-auto flex justify-between items-center gap-3 bg-white border border-gray-100 px-6 py-4 rounded-2xl shadow-sm flex-shrink-0">
+        <div className="flex items-center gap-2 font-bold text-xl flex-shrink-0">
           <Shield className="w-6 h-6 text-blue-600" />
           <span>Contract<span className="text-blue-600 font-medium">Intel</span></span>
         </div>
         
         {user ? (
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 bg-white px-3.5 py-1.5 rounded-full border border-gray-100 shadow-sm text-xs font-medium text-gray-600">
-              <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-              <span>{user.email}</span>
+          <div className="flex items-center gap-2 sm:gap-3">
+            <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-full border border-gray-100 shadow-sm text-xs font-medium text-gray-600">
+              <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse flex-shrink-0"></div>
+              <span className="truncate max-w-[120px] sm:max-w-none">{user.email}</span>
             </div>
-            <button onClick={handleLogout} className="text-xs font-semibold text-red-500 hover:text-red-600 bg-red-50/50 px-3.5 py-1.5 rounded-full border border-red-100/50">
+            <button onClick={handleLogout} className="text-xs font-semibold text-red-500 hover:text-red-600 bg-red-50/50 px-3 py-1.5 rounded-full border border-red-100/50 flex-shrink-0">
               Sign Out
             </button>
           </div>
         ) : (
-          <button onClick={triggerGooglePopup} className="bg-white border border-gray-200 text-gray-700 font-semibold px-4 py-2 rounded-full text-xs shadow-sm hover:bg-gray-50">
-            Sign In with Google
+          <button onClick={triggerGooglePopup} className="bg-white border border-gray-200 text-gray-700 font-semibold px-3 sm:px-4 py-2 rounded-full text-xs shadow-sm hover:bg-gray-50 flex-shrink-0 whitespace-nowrap">
+            <span className="hidden sm:inline">Sign In with Google</span>
+            <span className="sm:hidden">Sign In</span>
           </button>
         )}
       </header>
