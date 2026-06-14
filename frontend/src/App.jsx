@@ -122,7 +122,7 @@
 // export default App
 
 
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Upload, Shield, Sparkles, FileText, CheckCircle, ChevronDown, ChevronUp, Eye } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import api from './api.js';
@@ -214,78 +214,99 @@ export default function App() {
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [processedDoc, setProcessedDoc] = useState(null);
   const [activeClauseId, setActiveClauseId] = useState(null);
+  const googleReadyRef = useRef(false);
+  const googleTokenClientRef = useRef(null);
 
-  // 🔥 NEW REF: Stores references to all left side text paragraphs dynamically
+  // ???? NEW REF: Stores references to all left side text paragraphs dynamically
   const paragraphRefs = useRef([]);
   const analysisCardRefs = useRef([]);
 
-  useEffect(() => {
-    const BACKEND = import.meta.env.VITE_API_URL || 'https://contract-intel.onrender.com';
+  const handleGoogleResponse = useCallback(async (authResult) => {
+    const token = authResult?.credential || authResult?.access_token;
 
-    // ─── Wake up backend immediately on page load ───
-    fetch(`${BACKEND}/health/`).catch(() => {});
+    if (!token) {
+      console.error('Google sign-in returned no usable token.', authResult);
+      alert('Google sign-in did not return a valid token. Please try again.');
+      return;
+    }
 
-    // ─── Keep backend alive every 4 minutes (Render sleeps at 15min) ───
-    const keepAlive = setInterval(() => {
-      fetch(`${BACKEND}/health/`).catch(() => {});
-    }, 4 * 60 * 1000);
-
-    // ─── Load Google GSI script dynamically (fixes race condition) ───
-    const script = document.createElement('script');
-    script.src = 'https://accounts.google.com/gsi/client';
-    script.async = true;
-    script.defer = true;
-    script.onload = () => {
-      /* global google */
-      google.accounts.id.initialize({
-        client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID,
-        callback: handleGoogleResponse,
-        use_fedcm_for_prompt: false,
-      });
-    };
-    document.head.appendChild(script);
-
-    return () => {
-      clearInterval(keepAlive);
-      const existing = document.querySelector('script[src="https://accounts.google.com/gsi/client"]');
-      if (existing) existing.remove();
-    };
-  }, []);
-
-  const handleGoogleResponse = async (authResult) => {
     try {
       const response = await api.post('/api/auth/google/', {
-        access_token: authResult.credential,
+        token,
+        token_type: authResult?.credential ? 'id_token' : 'access_token',
       });
       localStorage.setItem('token', response.data.access);
       setUser(response.data.user);
     } catch (error) {
-      console.error(error);
+      console.error('Google sign-in failed:', error);
+      const message = error.code === 'ERR_NETWORK'
+        ? 'Backend is not running on http://127.0.0.1:8000. Start the Django server, then try Google sign-in again.'
+        : (error.response?.data?.error || 'Google sign-in failed. Please try again.');
+      alert(message);
     }
-  };
+  }, []);
 
-  const triggerGooglePopup = () => {
-    if (typeof google !== 'undefined') {
-      // Re-initialize every time to bypass Google's prompt suppression
+  useEffect(() => {
+    const BACKEND = import.meta.env.VITE_API_URL || 'https://contract-intel.onrender.com';
+    const isLocalBackend = /localhost:8000|127\.0\.0\.1:8000/.test(BACKEND);
+
+    // Wake hosted backend only; skip noisy failed pings during local frontend-only runs.
+    if (!isLocalBackend) {
+      fetch(`${BACKEND}/health/`).catch(() => {});
+    }
+
+    // Keep hosted backend awake on Render.
+    const keepAlive = !isLocalBackend
+      ? setInterval(() => {
+          fetch(`${BACKEND}/health/`).catch(() => {});
+        }, 4 * 60 * 1000)
+      : null;
+
+    const initializeGoogle = () => {
+      if (googleReadyRef.current || typeof google === 'undefined') return;
+
       google.accounts.id.initialize({
         client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID,
         callback: handleGoogleResponse,
         use_fedcm_for_prompt: false,
       });
-      google.accounts.id.prompt((notification) => {
-        if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
-          // Prompt was suppressed — open Google sign-in in a popup window
-          const w = 500, h = 600;
-          const left = window.screenX + (window.outerWidth - w) / 2;
-          const top = window.screenY + (window.outerHeight - h) / 2;
-          window.open(
-            `https://accounts.google.com/o/oauth2/v2/auth?client_id=${import.meta.env.VITE_GOOGLE_CLIENT_ID}&response_type=token&scope=email%20profile`,
-            'googleSignIn',
-            `width=${w},height=${h},left=${left},top=${top}`
-          );
-        }
+      googleTokenClientRef.current = google.accounts.oauth2.initTokenClient({
+        client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID,
+        scope: 'openid email profile',
+        callback: handleGoogleResponse,
+        error_callback: (error) => {
+          console.error('Google OAuth popup failed:', error);
+          alert('Google sign-in could not be completed. Please try again.');
+        },
       });
+      googleReadyRef.current = true;
+    };
+
+    // ????????? Load Google GSI script dynamically (fixes race condition) ?????????
+    const existingScript = document.querySelector('script[src="https://accounts.google.com/gsi/client"]');
+    if (existingScript) {
+      initializeGoogle();
+    } else {
+      const script = document.createElement('script');
+      script.src = 'https://accounts.google.com/gsi/client';
+      script.async = true;
+      script.defer = true;
+      script.onload = initializeGoogle;
+      document.head.appendChild(script);
     }
+
+    return () => {
+      if (keepAlive) clearInterval(keepAlive);
+    };
+  }, [handleGoogleResponse]);
+
+  const triggerGooglePopup = () => {
+    if (!googleReadyRef.current || !googleTokenClientRef.current) {
+      alert('Google sign-in is still loading. Please try again in a moment.');
+      return;
+    }
+
+    googleTokenClientRef.current.requestAccessToken({ prompt: 'consent' });
   };
 
   const handleLogout = () => {
@@ -343,9 +364,15 @@ export default function App() {
         setActiveClauseId(0);
       }
     } catch (err) {
-      alert('Upload failed. Check the console for details.');
+      const errorMessage =
+        err.response?.data?.error ||
+        (err.response?.status === 401
+          ? 'Your session expired. Please sign in again.'
+          : 'Upload failed. Please try again.');
+      alert(errorMessage);
       console.error(err);
     } finally {
+      event.target.value = '';
       setLoading(false);
       setLoadingStep('');
       setLoadingProgress(0);

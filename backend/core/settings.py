@@ -13,10 +13,12 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 from pathlib import Path
 from datetime import timedelta
 import dj_database_url
+import importlib.util
 import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+HAS_WHITENOISE = importlib.util.find_spec("whitenoise") is not None
 
 
 def _load_local_env_file():
@@ -83,10 +85,11 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'whitenoise.middleware.WhiteNoiseMiddleware',
 ]
 
-STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+if HAS_WHITENOISE:
+    MIDDLEWARE.append('whitenoise.middleware.WhiteNoiseMiddleware')
+    STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 # 3. Cross-Origin Resource Sharing (CORS) Allowances
 CORS_ALLOWED_ORIGINS = [
@@ -124,31 +127,37 @@ WSGI_APPLICATION = 'core.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-if os.getenv('DATABASE_URL'):
-    # 🚀 RUNNING LIVE ON RENDER: Parse the direct connection string automatically
+database_url = os.getenv("DATABASE_URL")
+db_engine = os.getenv("DB_ENGINE", "postgres").strip().lower()
+
+if database_url:
     DATABASES = {
-        'default': dj_database_url.config(
-            default=os.getenv('DATABASE_URL'),
+        "default": dj_database_url.config(
+            default=database_url,
             conn_max_age=600,
         )
     }
-    # Secure Render PostgreSQL SSL connection requirements
-    DATABASES['default']['OPTIONS'] = {
-        'sslmode': 'require'
+    DATABASES["default"]["OPTIONS"] = {
+        "sslmode": "require"
     }
-else:
-    # 💻 RUNNING LOCALLY ON YOUR COMPUTER: Clean fallback configuration
+elif db_engine in {"postgres", "postgresql"}:
     DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.postgresql',
-            'NAME': 'contractintel_db',
-            'USER': 'postgres',
-            'PASSWORD': '',  # Safe empty local password string
-            'HOST': 'localhost',
-            'PORT': '5432',
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": os.getenv("DB_NAME", "contractintel_db"),
+            "USER": os.getenv("DB_USER", "postgres"),
+            "PASSWORD": os.getenv("DB_PASSWORD", ""),
+            "HOST": os.getenv("DB_HOST", "localhost"),
+            "PORT": os.getenv("DB_PORT", "5432"),
         }
     }
-
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
+    }
 
 
 # Password validation

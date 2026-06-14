@@ -78,18 +78,45 @@ else:
 class GoogleLoginView(APIView):
     permission_classes = [AllowAny]
 
-    def post(self, request):
-        access_token = request.data.get("access_token")
-        if not access_token:
-            return Response({"error": "Token is required"}, status=status.HTTP_400_BAD_REQUEST)
-
-        google_verify_url = f"https://www.googleapis.com/oauth2/v3/tokeninfo?id_token={access_token}"
-        response = requests.get(google_verify_url)
+    @staticmethod
+    def _fetch_google_user_info(token: str, token_type: str) -> dict | None:
+        try:
+            if token_type == "access_token":
+                response = requests.get(
+                    "https://www.googleapis.com/oauth2/v3/userinfo",
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=10,
+                )
+            else:
+                response = requests.get(
+                    "https://www.googleapis.com/oauth2/v3/tokeninfo",
+                    params={"id_token": token},
+                    timeout=10,
+                )
+        except requests.RequestException as exc:
+            print(f"Google token verification failed: {exc}")
+            return None
 
         if response.status_code != 200:
+            print(f"Google token rejected ({token_type}): {response.text}")
+            return None
+
+        return response.json()
+
+    def post(self, request):
+        token = request.data.get("token") or request.data.get("access_token")
+        token_type = request.data.get("token_type")
+
+        if not token:
+            return Response({"error": "Token is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if token_type not in {"id_token", "access_token"}:
+            token_type = "id_token" if request.data.get("access_token") else "id_token"
+
+        user_info = self._fetch_google_user_info(token, token_type)
+        if not user_info:
             return Response({"error": "Invalid Google token"}, status=status.HTTP_400_BAD_REQUEST)
 
-        user_info = response.json()
         email = user_info.get("email")
         if not email:
             return Response(
@@ -105,6 +132,11 @@ class GoogleLoginView(APIView):
                 "last_name": user_info.get("family_name", ""),
             },
         )
+
+        if not user.first_name and user_info.get("given_name"):
+            user.first_name = user_info.get("given_name", "")
+            user.last_name = user_info.get("family_name", user.last_name)
+            user.save(update_fields=["first_name", "last_name"])
 
         refresh = RefreshToken.for_user(user)
         return Response(
