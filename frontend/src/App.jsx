@@ -122,7 +122,7 @@
 // export default App
 
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Upload, Shield, Sparkles, FileText, CheckCircle, ChevronDown, ChevronUp, Eye } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import api from './api.js';
@@ -215,13 +215,13 @@ export default function App() {
   const [processedDoc, setProcessedDoc] = useState(null);
   const [activeClauseId, setActiveClauseId] = useState(null);
   const googleReadyRef = useRef(false);
-  const googleTokenClientRef = useRef(null);
+  const googleButtonHostRef = useRef(null);
 
   // ???? NEW REF: Stores references to all left side text paragraphs dynamically
   const paragraphRefs = useRef([]);
   const analysisCardRefs = useRef([]);
 
-  const handleGoogleResponse = useCallback(async (authResult) => {
+  const handleGoogleResponse = async (authResult) => {
     const token = authResult?.credential || authResult?.access_token;
 
     if (!token) {
@@ -240,11 +240,11 @@ export default function App() {
     } catch (error) {
       console.error('Google sign-in failed:', error);
       const message = error.code === 'ERR_NETWORK'
-        ? 'Backend is not running on http://127.0.0.1:8000. Start the Django server, then try Google sign-in again.'
+        ? 'Backend could not be reached. Make sure the Django API is running or deployed, then try Google sign-in again.'
         : (error.response?.data?.error || 'Google sign-in failed. Please try again.');
       alert(message);
     }
-  }, []);
+  };
 
   useEffect(() => {
     const BACKEND = import.meta.env.VITE_API_URL || 'https://contract-intel.onrender.com';
@@ -262,23 +262,51 @@ export default function App() {
         }, 4 * 60 * 1000)
       : null;
 
+    const restoreUser = async () => {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+
+      try {
+        const response = await api.get('/api/auth/me/');
+        setUser(response.data);
+      } catch (error) {
+        console.error('Session restore failed:', error);
+        localStorage.removeItem('token');
+      }
+    };
+
+    restoreUser();
+
     const initializeGoogle = () => {
       if (googleReadyRef.current || typeof google === 'undefined') return;
+      const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+
+      if (!clientId) {
+        console.error('VITE_GOOGLE_CLIENT_ID is missing.');
+        return;
+      }
 
       google.accounts.id.initialize({
-        client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID,
+        client_id: clientId,
         callback: handleGoogleResponse,
-        use_fedcm_for_prompt: false,
+        use_fedcm_for_prompt: true,
+        use_fedcm_for_button: true,
+        auto_select: false,
       });
-      googleTokenClientRef.current = google.accounts.oauth2.initTokenClient({
-        client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID,
-        scope: 'openid email profile',
-        callback: handleGoogleResponse,
-        error_callback: (error) => {
-          console.error('Google OAuth popup failed:', error);
-          alert('Google sign-in could not be completed. Please try again.');
-        },
-      });
+
+      if (googleButtonHostRef.current) {
+        googleButtonHostRef.current.innerHTML = '';
+        google.accounts.id.renderButton(googleButtonHostRef.current, {
+          type: 'standard',
+          theme: 'outline',
+          size: 'large',
+          text: 'signin_with',
+          shape: 'pill',
+          width: 240,
+          logo_alignment: 'left',
+        });
+      }
+
       googleReadyRef.current = true;
     };
 
@@ -298,15 +326,33 @@ export default function App() {
     return () => {
       if (keepAlive) clearInterval(keepAlive);
     };
-  }, [handleGoogleResponse]);
+  }, []);
 
   const triggerGooglePopup = () => {
-    if (!googleReadyRef.current || !googleTokenClientRef.current) {
+    if (!googleReadyRef.current) {
       alert('Google sign-in is still loading. Please try again in a moment.');
       return;
     }
 
-    googleTokenClientRef.current.requestAccessToken({ prompt: 'consent' });
+    const button =
+      googleButtonHostRef.current?.querySelector('div[role="button"]') ||
+      googleButtonHostRef.current?.firstElementChild;
+
+    if (button && typeof button.click === 'function') {
+      button.click();
+      return;
+    }
+
+    if (typeof google !== 'undefined') {
+      google.accounts.id.prompt((notification) => {
+        if (notification.isNotDisplayed?.() || notification.isSkippedMoment?.()) {
+          alert('Google sign-in could not be opened on this browser. Please try normal browsing mode or check that Google popups are allowed.');
+        }
+      });
+      return;
+    }
+
+    alert('Google sign-in is unavailable right now. Please refresh and try again.');
   };
 
   const handleLogout = () => {
@@ -515,6 +561,12 @@ export default function App() {
           <Shield className="w-6 h-6 text-blue-600" />
           <span>Contract<span className="text-blue-600 font-medium">Intel</span></span>
         </div>
+
+        <div
+          ref={googleButtonHostRef}
+          className="fixed -left-[9999px] top-0 opacity-0 pointer-events-none"
+          aria-hidden="true"
+        />
         
         {user ? (
           <div className="flex items-center gap-2 sm:gap-3">
