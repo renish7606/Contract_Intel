@@ -1,21 +1,19 @@
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ── Base Reset ──────────────────────────────────────────── */
+html {
+  scroll-behavior: smooth;
+}
 
 body {
   @apply bg-canvas text-intelText font-sans antialiased;
   overflow-x: hidden;
 }
 
-/* Smooth, fluid transitions for all floating interactive elements */
-/* * {
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-} */
-
-
-/* --- Clean, Reusable UI Components --- */
-
+/* ── Reusable UI Components ──────────────────────────────── */
 .btn-primary {
   @apply bg-[#111827] text-white px-5 py-2 rounded-full text-sm font-medium hover:bg-gray-800 transition-all duration-200 shadow-sm;
 }
@@ -28,7 +26,63 @@ body {
   @apply w-full max-w-xl bg-white border border-dashed border-gray-200 rounded-3xl p-12 cursor-pointer flex flex-col items-center justify-center transition-all duration-300 shadow-sm;
 }
 
-/* This handles the subtle weightless float up on hover */
 .upload-card:hover {
   @apply border-blue-400 -translate-y-1.5 shadow-md;
+}
+
+/* ── Framer Motion / Animation Utilities ─────────────────── */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slide-in-from-top {
+  from { transform: translateY(-8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.animate-in {
+  animation-fill-mode: both;
+}
+
+.fade-in {
+  animation-name: fade-in;
+}
+
+.slide-in-from-top-2 {
+  animation-name: slide-in-from-top;
+}
+
+.duration-150 {
+  animation-duration: 150ms;
+}
+
+.duration-200 {
+  animation-duration: 200ms;
+}
+
+/* ── Custom Scrollbar ────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #374151;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #4b5563;
 }

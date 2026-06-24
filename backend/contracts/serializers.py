@@ -10,7 +10,6 @@ class ContractClauseSerializer(serializers.ModelSerializer):
 
 class DocumentSerializer(serializers.ModelSerializer):
     """Serializes the full document along with all its classified clauses."""
-    # 🔥 FIX: Tell Django to fetch and nest all related clauses inside the document payload
     clauses = ContractClauseSerializer(many=True, read_only=True)
 
     class Meta:
@@ -22,5 +21,6 @@ class DocumentSerializer(serializers.ModelSerializer):
             'created_at',
             'overall_risk_score',
             'analysis_mode',
+            'redaction_summary',
             'clauses',
         ]

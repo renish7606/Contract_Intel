@@ -21,6 +21,11 @@ class Document(models.Model):
         choices=ANALYSIS_MODE_CHOICES,
         default="LOCAL_FALLBACK",
     )
+    redaction_summary = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="PII redaction counts by type, e.g. {'total_removed': 7, 'by_type': {'PERSON': 3}}",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

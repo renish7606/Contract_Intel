@@ -75,11 +75,42 @@ else:
     clause_model = None
 
 
+# ── High-risk clause types used for risk score calculation ────────────
+HIGH_RISK_CLAUSE_TYPES = [
+    "Limitation of Liability",
+    "Cap on Liability",
+    "IP Ownership Assignment",
+    "Non-Compete",
+    "Competitive Restriction Exception",
+    "Automatic Renewal",
+    "Unilateral Amendment",
+    "Indemnification",
+    "Exclusivity",
+    "Liquidated Damages",
+    "Termination for Convenience",
+]
+
+
+def calculate_risk_score(flagged_clauses: list) -> str:
+    """Return HIGH / MEDIUM / LOW based on how many high-risk clause types appear."""
+    high_risk_set = {t.lower() for t in HIGH_RISK_CLAUSE_TYPES}
+    high_count = sum(
+        1 for c in flagged_clauses
+        if (c.get("category") or "").strip().lower() in high_risk_set
+    )
+    if high_count >= 3:
+        return "HIGH"
+    elif high_count >= 1:
+        return "MEDIUM"
+    return "LOW"
+
+
 class GoogleLoginView(APIView):
     permission_classes = [AllowAny]
 
     @staticmethod
     def _fetch_google_user_info(token: str, token_type: str) -> dict | None:
+        """Verify a Google OAuth token and return user info."""
         try:
             if token_type == "access_token":
                 response = requests.get(
@@ -147,6 +178,7 @@ class GoogleLoginView(APIView):
                     "id": user.id,
                     "email": user.email,
                     "first_name": user.first_name,
+                    "picture": user_info.get("picture", ""),
                 },
             },
             status=status.HTTP_200_OK,
@@ -498,15 +530,20 @@ class DocumentListCreateView(generics.ListCreateAPIView):
 
         try:
             raw_text = ContractFileParser.extract_text(uploaded_file, uploaded_file.name)
-            scrubbed_data = scrubber.scrub_text(raw_text)
+
+            # PIIScrubber now returns a dict with scrubbed_text + redaction_summary
+            scrub_result = scrubber.scrub_text(raw_text)
+            scrubbed_text = scrub_result["scrubbed_text"]
+            redaction_summary = scrub_result["redaction_summary"]
 
             document = Document.objects.create(
                 user=request.user,
                 title=uploaded_file.name,
-                scrubbed_text=scrubbed_data,
+                scrubbed_text=scrubbed_text,
+                redaction_summary=redaction_summary,
             )
 
-            paragraphs = ContractFileParser.split_into_clauses(scrubbed_data)
+            paragraphs = ContractFileParser.split_into_clauses(scrubbed_text)
             clause_data = []
             for idx, paragraph in enumerate(paragraphs):
                 predicted_label = (
@@ -616,14 +653,18 @@ class DocumentListCreateView(generics.ListCreateAPIView):
             else:
                 document.save(update_fields=["analysis_mode"])
 
+            # Compute the risk_score label using the GEMINI.md spec logic
+            risk_score_label = calculate_risk_score(clause_data)
+
             serializer = self.get_serializer(document)
             response_data = dict(serializer.data)
             response_data["executive_summary"] = self._generate_executive_summary(
                 title=uploaded_file.name,
-                scrubbed_text=scrubbed_data,
+                scrubbed_text=scrubbed_text,
                 clauses=clause_data,
                 overall_score=document.overall_risk_score or 0,
             )
+            response_data["risk_score"] = risk_score_label
             return Response(response_data, status=status.HTTP_201_CREATED)
 
         except Exception as err:
