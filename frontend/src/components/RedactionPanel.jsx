@@ -28,21 +28,21 @@ export default function RedactionPanel({ redactionSummary, scrubbedText }) {
   return (
     <div className={`rounded-2xl border p-5 transition-all duration-300 ${
       hasRedactions
-        ? 'bg-green-50/50 dark:bg-green-900/10 border-green-200 dark:border-green-800'
-        : 'bg-gray-50 dark:bg-gray-800/50 border-gray-100 dark:border-gray-800'
+        ? 'bg-green-50/50 border-green-200'
+        : 'bg-gray-50 border-gray-100'
     }`}>
       {/* Header */}
       <div className="flex items-center gap-2 mb-3">
-        <div className={`p-1.5 rounded-lg ${hasRedactions ? 'bg-green-100 dark:bg-green-900/40' : 'bg-gray-100 dark:bg-gray-800'}`}>
+        <div className={`p-1.5 rounded-lg ${hasRedactions ? 'bg-green-100' : 'bg-gray-100'}`}>
           <Shield className={`w-4 h-4 ${hasRedactions ? 'text-green-600' : 'text-gray-400'}`} />
         </div>
-        <h3 className="text-sm font-bold text-gray-900 dark:text-white">
+        <h3 className="text-sm font-bold text-gray-900">
           🔒 Privacy Shield Applied
         </h3>
       </div>
 
       {/* Description */}
-      <p className="text-xs text-gray-600 dark:text-gray-300 mb-4 leading-relaxed">
+      <p className="text-xs text-gray-600 mb-4 leading-relaxed">
         {hasRedactions
           ? `We removed ${total_removed} piece${total_removed !== 1 ? 's' : ''} of personal data before sending your contract for analysis.`
           : 'No personal data was detected in this document. It was analysed as-is.'}
@@ -57,7 +57,7 @@ export default function RedactionPanel({ redactionSummary, scrubbedText }) {
             return (
               <div
                 key={type}
-                className="inline-flex items-center gap-1.5 bg-white dark:bg-gray-800 border border-green-100 dark:border-green-800 rounded-full px-3 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-300"
+                className="inline-flex items-center gap-1.5 bg-white border border-green-100 rounded-full px-3 py-1.5 text-xs font-medium text-gray-700"
               >
                 <Icon className="w-3 h-3 text-green-500" />
                 {count} × {label}
@@ -71,7 +71,7 @@ export default function RedactionPanel({ redactionSummary, scrubbedText }) {
       {scrubbedText && (
         <button
           onClick={() => setShowPreview(!showPreview)}
-          className="flex items-center gap-1 text-xs font-semibold text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
+          className="flex items-center gap-1 text-xs font-semibold text-gray-500 hover:text-gray-700 transition-colors"
         >
           {showPreview ? (
             <>Hide Redacted Preview <ChevronUp className="w-3.5 h-3.5" /></>
@@ -82,8 +82,8 @@ export default function RedactionPanel({ redactionSummary, scrubbedText }) {
       )}
 
       {showPreview && scrubbedText && (
-        <div className="mt-3 bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-xl p-4 max-h-60 overflow-y-auto">
-          <p className="text-xs font-mono text-gray-500 dark:text-gray-400 leading-relaxed whitespace-pre-wrap">
+        <div className="mt-3 bg-white border border-gray-100 rounded-xl p-4 max-h-60 overflow-y-auto">
+          <p className="text-xs font-mono text-gray-500 leading-relaxed whitespace-pre-wrap">
             {scrubbedText.slice(0, 2000)}
             {scrubbedText.length > 2000 && '...'}
           </p>

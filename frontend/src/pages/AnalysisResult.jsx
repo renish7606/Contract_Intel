@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { ChevronDown, ChevronUp, Eye, FileText } from 'lucide-react';
 import RedactionPanel from '../components/RedactionPanel.jsx';
 import SummaryCard from '../components/SummaryCard.jsx';
+import ErrorBoundary from '../components/ErrorBoundary.jsx';
 
 /**
  * ClauseCard — renders a single clause in the detailed clause-by-clause view.
@@ -11,14 +12,14 @@ import SummaryCard from '../components/SummaryCard.jsx';
 function ClauseCard({ clause, idx, isActive, setActive }) {
   const [isOpen, setIsOpen] = useState(false);
   const riskStyle = {
-    HIGH: 'border-red-300 bg-red-50/20 ring-red-200/40 dark:border-red-800 dark:bg-red-900/10',
-    MEDIUM: 'border-yellow-300 bg-yellow-50/20 ring-yellow-200/40 dark:border-yellow-800 dark:bg-yellow-900/10',
-    LOW: 'border-green-200 bg-green-50/10 ring-green-100/30 dark:border-green-800 dark:bg-green-900/10',
+    HIGH: 'border-red-300 bg-red-50/20 ring-red-200/40',
+    MEDIUM: 'border-yellow-300 bg-yellow-50/20 ring-yellow-200/40',
+    LOW: 'border-green-200 bg-green-50/10 ring-green-100/30',
   };
   const riskBadgeStyle = {
-    HIGH: 'bg-red-50 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-300 dark:border-red-800',
-    MEDIUM: 'bg-yellow-50 text-yellow-700 border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300 dark:border-yellow-800',
-    LOW: 'bg-green-50 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800',
+    HIGH: 'bg-red-50 text-red-700 border-red-200',
+    MEDIUM: 'bg-yellow-50 text-yellow-700 border-yellow-200',
+    LOW: 'bg-green-50 text-green-700 border-green-200',
   };
 
   return (
@@ -31,7 +32,7 @@ function ClauseCard({ clause, idx, isActive, setActive }) {
       }`}
     >
       <div className="flex justify-between items-center">
-        <span className="text-[11px] font-bold px-3 py-1 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-full border border-blue-100/30 dark:border-blue-800 shadow-sm">
+        <span className="text-[11px] font-bold px-3 py-1 bg-blue-50 text-blue-700 rounded-full border border-blue-100/30 shadow-sm">
           🔹 {clause.category}
         </span>
         <div className="flex items-center gap-1.5">
@@ -42,17 +43,17 @@ function ClauseCard({ clause, idx, isActive, setActive }) {
 
       {/* Simplified Summary */}
       <div className="space-y-1">
-        <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider block">Plain English Summary</span>
-        <p className="text-xs text-gray-800 dark:text-gray-200 font-medium leading-relaxed bg-blue-50/10 dark:bg-blue-900/10 border border-blue-100/20 dark:border-blue-800 p-3.5 rounded-xl">
+        <span className="text-[10px] font-bold text-blue-600 uppercase tracking-wider block">Plain English Summary</span>
+        <p className="text-xs text-gray-800 font-medium leading-relaxed bg-blue-50/10 border border-blue-100/20 p-3.5 rounded-xl">
           {clause.simplified_text}
         </p>
       </div>
 
       {/* Accordion for Original Jargon */}
-      <div className="border-t border-gray-50 dark:border-gray-800 pt-2" onClick={(e) => e.stopPropagation()}>
+      <div className="border-t border-gray-50 pt-2" onClick={(e) => e.stopPropagation()}>
         <button
           onClick={() => setIsOpen(!isOpen)}
-          className="flex items-center gap-1 text-[10px] font-bold text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors uppercase tracking-wider"
+          className="flex items-center gap-1 text-[10px] font-bold text-gray-400 hover:text-gray-600 transition-colors uppercase tracking-wider"
         >
           {isOpen ? (
             <>Hide Original Text <ChevronUp className="w-3 h-3" /></>
@@ -62,13 +63,13 @@ function ClauseCard({ clause, idx, isActive, setActive }) {
         </button>
 
         {isOpen && (
-          <p className="mt-2 text-[11px] text-gray-500 dark:text-gray-400 font-mono bg-gray-50 dark:bg-gray-800 p-3 rounded-xl border border-gray-100 dark:border-gray-700 leading-relaxed italic">
+          <p className="mt-2 text-[11px] text-gray-500 font-mono bg-gray-50 p-3 rounded-xl border border-gray-100 leading-relaxed italic">
             "{clause.original_text}"
           </p>
         )}
       </div>
 
-      <div className="border-t border-dashed border-gray-100 dark:border-gray-800 pt-2 flex items-center justify-between text-[10px] text-gray-400">
+      <div className="border-t border-dashed border-gray-100 pt-2 flex items-center justify-between text-[10px] text-gray-400">
         <span className={`flex items-center gap-1 px-2 py-0.5 rounded-full border font-semibold ${riskBadgeStyle[clause.risk_level] || riskBadgeStyle.LOW}`}>
           {clause.risk_level || 'LOW'} RISK
         </span>
@@ -106,24 +107,28 @@ export default function AnalysisResult() {
   };
 
   return (
-    <div className="min-h-[calc(100vh-60px)] bg-gray-50/50 dark:bg-gray-950">
+    <div className="min-h-[calc(100vh-60px)] bg-gray-50/50">
       <div className="max-w-7xl mx-auto px-6 py-8 space-y-6">
 
         {/* Redaction Disclosure Panel */}
-        <RedactionPanel
-          redactionSummary={analysisData.redaction_summary}
-          scrubbedText={analysisData.scrubbed_text}
-        />
+        <ErrorBoundary fallbackMessage="Could not display redaction info.">
+          <RedactionPanel
+            redactionSummary={analysisData.redaction_summary}
+            scrubbedText={analysisData.scrubbed_text}
+          />
+        </ErrorBoundary>
 
         {/* Summary Card (Main) */}
-        <SummaryCard data={analysisData} />
+        <ErrorBoundary fallbackMessage="Could not display contract summary.">
+          <SummaryCard data={analysisData} />
+        </ErrorBoundary>
 
         {/* Detailed Clause View Toggle */}
         {clauses.length > 0 && (
           <div className="pt-4">
             <button
               onClick={() => setShowDetailView(!showDetailView)}
-              className="flex items-center gap-2 text-sm font-semibold text-gray-600 dark:text-gray-300 hover:text-blue-600 transition-colors"
+              className="flex items-center gap-2 text-sm font-semibold text-gray-600 hover:text-blue-600 transition-colors"
             >
               <FileText className="w-4 h-4" />
               {showDetailView ? 'Hide' : 'Show'} Detailed Clause-by-Clause View ({clauses.length} clauses)
@@ -133,14 +138,14 @@ export default function AnalysisResult() {
             {showDetailView && (
               <div className="mt-6 grid grid-cols-1 lg:grid-cols-[1.05fr_1.25fr] gap-8 animate-in fade-in duration-200">
                 {/* LEFT: Original text with highlights */}
-                <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl p-6 flex flex-col shadow-sm">
-                  <div className="flex items-center gap-2 mb-4 pb-3 border-b border-gray-100 dark:border-gray-800">
+                <div className="bg-white border border-gray-100 rounded-2xl p-6 flex flex-col shadow-sm">
+                  <div className="flex items-center gap-2 mb-4 pb-3 border-b border-gray-100">
                     <FileText className="w-4 h-4 text-blue-500" />
-                    <h3 className="text-xs font-bold text-gray-700 dark:text-gray-200 truncate">
+                    <h3 className="text-xs font-bold text-gray-700 truncate">
                       {analysisData.title} — Scrubbed Text
                     </h3>
                   </div>
-                  <div className="flex-1 bg-gray-50/30 dark:bg-gray-800/30 border border-gray-100 dark:border-gray-800 p-5 rounded-xl overflow-y-auto space-y-3 max-h-[65vh]">
+                  <div className="flex-1 bg-gray-50/30 border border-gray-100 p-5 rounded-xl overflow-y-auto space-y-3 max-h-[65vh]">
                     {clauses.map((clause, index) => {
                       const isHighlighted = activeClauseId === index;
                       return (
@@ -150,8 +155,8 @@ export default function AnalysisResult() {
                           onClick={() => setActiveClauseId(index)}
                           className={`p-3 rounded-xl text-xs font-mono leading-relaxed transition-all duration-300 cursor-pointer scroll-mt-2 ${
                             isHighlighted
-                              ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-900 dark:text-blue-100 font-semibold border-l-4 border-blue-500 shadow-sm scale-[1.01]'
-                              : 'text-gray-600 dark:text-gray-400 bg-transparent hover:bg-gray-100/50 dark:hover:bg-gray-800/50'
+                              ? 'bg-blue-50 text-blue-900 font-semibold border-l-4 border-blue-500 shadow-sm scale-[1.01]'
+                              : 'text-gray-600 bg-transparent hover:bg-gray-100/50'
                           }`}
                         >
                           {clause.original_text}
@@ -163,9 +168,9 @@ export default function AnalysisResult() {
 
                 {/* RIGHT: Analysis cards */}
                 <div className="flex flex-col space-y-4 overflow-y-auto max-h-[65vh] pr-1">
-                  <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 p-4 rounded-2xl flex justify-between items-center shadow-sm sticky top-0 z-10">
+                  <div className="bg-white border border-gray-100 p-4 rounded-2xl flex justify-between items-center shadow-sm sticky top-0 z-10">
                     <span className="text-[10px] font-bold text-gray-400 tracking-wider uppercase">AI Analysis Feed</span>
-                    <span className="text-xs bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300 font-bold px-3 py-1 rounded-full border border-blue-100/50 dark:border-blue-800">
+                    <span className="text-xs bg-blue-50 text-blue-600 font-bold px-3 py-1 rounded-full border border-blue-100/50">
                       {clauses.length} Clauses Classified
                     </span>
                   </div>

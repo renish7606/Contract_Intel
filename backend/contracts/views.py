@@ -40,7 +40,7 @@ raw_models = (
 if raw_models:
     GEMINI_MODEL_CANDIDATES = [m.strip() for m in raw_models.split(",") if m.strip()]
 else:
-    GEMINI_MODEL_CANDIDATES = ["gemini-2.5-flash-lite"]
+    GEMINI_MODEL_CANDIDATES = ["gemini-2.5-flash-lite", "gemini-2.0-flash"]
 GEMINI_MODEL_CANDIDATES = list(dict.fromkeys(GEMINI_MODEL_CANDIDATES))
 MAX_BATCH_CLAUSES = 25
 MAX_CLAUSE_CHARS_FOR_AI = 350
@@ -142,7 +142,7 @@ class GoogleLoginView(APIView):
             return Response({"error": "Token is required"}, status=status.HTTP_400_BAD_REQUEST)
 
         if token_type not in {"id_token", "access_token"}:
-            token_type = "id_token" if request.data.get("access_token") else "id_token"
+            token_type = "access_token" if request.data.get("access_token") else "id_token"
 
         user_info = self._fetch_google_user_info(token, token_type)
         if not user_info:

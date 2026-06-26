@@ -3,12 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import { Sparkles, FileText, ArrowRight, Clock, AlertTriangle, CheckCircle, Shield } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.jsx';
 import UploadPanel from '../components/UploadPanel.jsx';
+import ErrorBoundary from '../components/ErrorBoundary.jsx';
 import api from '../api.js';
 
 const RISK_BADGE = {
-  HIGH: 'bg-red-100 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-300 dark:border-red-800',
-  MEDIUM: 'bg-yellow-100 text-yellow-700 border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300 dark:border-yellow-800',
-  LOW: 'bg-green-100 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800',
+  HIGH: 'bg-red-100 text-red-700 border-red-200',
+  MEDIUM: 'bg-yellow-100 text-yellow-700 border-yellow-200',
+  LOW: 'bg-green-100 text-green-700 border-green-200',
 };
 
 export default function Dashboard() {
@@ -103,19 +104,19 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="min-h-[calc(100vh-60px)] bg-gray-50/50 dark:bg-gray-950">
+    <div className="min-h-[calc(100vh-60px)] bg-gray-50/50">
       <div className="max-w-7xl mx-auto px-6 py-8">
         {/* Welcome header */}
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+            <h1 className="text-2xl font-bold text-gray-900">
               Welcome back{user?.first_name ? `, ${user.first_name}` : ''}
             </h1>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            <p className="text-sm text-gray-500 mt-1">
               Upload a new contract or review past analyses.
             </p>
           </div>
-          <div className="hidden sm:flex items-center gap-2 bg-blue-50 dark:bg-blue-900/30 px-3 py-1.5 rounded-full text-xs font-medium text-blue-700 dark:text-blue-300 border border-blue-100 dark:border-blue-800">
+          <div className="hidden sm:flex items-center gap-2 bg-blue-50 px-3 py-1.5 rounded-full text-xs font-medium text-blue-700 border border-blue-100">
             <Sparkles className="w-3.5 h-3.5" />
             AI-Powered Analysis
           </div>
@@ -127,14 +128,16 @@ export default function Dashboard() {
           <div className="space-y-4">
             <div className="flex items-center gap-2 mb-2">
               <div className="w-1 h-5 bg-gradient-to-b from-blue-500 to-indigo-600 rounded-full" />
-              <h2 className="text-sm font-bold text-gray-900 dark:text-white">New Analysis</h2>
+              <h2 className="text-sm font-bold text-gray-900">New Analysis</h2>
             </div>
-            <UploadPanel
-              onUploadComplete={handleUpload}
-              loading={uploading}
-              loadingStep={loadingStep}
-              loadingProgress={loadingProgress}
-            />
+            <ErrorBoundary fallbackMessage="Upload panel encountered an error.">
+              <UploadPanel
+                onUploadComplete={handleUpload}
+                loading={uploading}
+                loadingStep={loadingStep}
+                loadingProgress={loadingProgress}
+              />
+            </ErrorBoundary>
           </div>
 
           {/* Right: Recent Analyses */}
@@ -142,7 +145,7 @@ export default function Dashboard() {
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2">
                 <div className="w-1 h-5 bg-gradient-to-b from-purple-500 to-pink-600 rounded-full" />
-                <h2 className="text-sm font-bold text-gray-900 dark:text-white">Recent Analyses</h2>
+                <h2 className="text-sm font-bold text-gray-900">Recent Analyses</h2>
               </div>
               {history.length > 0 && (
                 <span className="text-xs text-gray-400 font-medium">{history.length} total</span>
@@ -152,18 +155,18 @@ export default function Dashboard() {
             {historyLoading ? (
               <div className="space-y-3">
                 {[...Array(3)].map((_, i) => (
-                  <div key={i} className="bg-white dark:bg-gray-800/50 border border-gray-100 dark:border-gray-800 rounded-xl p-4 animate-pulse">
-                    <div className="h-4 bg-gray-100 dark:bg-gray-700 rounded w-3/4 mb-2" />
-                    <div className="h-3 bg-gray-100 dark:bg-gray-700 rounded w-1/3" />
+                  <div key={i} className="bg-white border border-gray-100 rounded-xl p-4 animate-pulse">
+                    <div className="h-4 bg-gray-100 rounded w-3/4 mb-2" />
+                    <div className="h-3 bg-gray-100 rounded w-1/3" />
                   </div>
                 ))}
               </div>
             ) : history.length === 0 ? (
-              <div className="bg-white dark:bg-gray-800/50 border border-gray-100 dark:border-gray-800 rounded-2xl p-10 text-center">
-                <div className="w-12 h-12 rounded-2xl bg-gray-50 dark:bg-gray-800 flex items-center justify-center mx-auto mb-4">
-                  <FileText className="w-6 h-6 text-gray-300 dark:text-gray-600" />
+              <div className="bg-white border border-gray-100 rounded-2xl p-10 text-center">
+                <div className="w-12 h-12 rounded-2xl bg-gray-50 flex items-center justify-center mx-auto mb-4">
+                  <FileText className="w-6 h-6 text-gray-300" />
                 </div>
-                <p className="text-sm font-medium text-gray-500 dark:text-gray-400">
+                <p className="text-sm font-medium text-gray-500">
                   No analyses yet
                 </p>
                 <p className="text-xs text-gray-400 mt-1">
@@ -178,13 +181,13 @@ export default function Dashboard() {
                     <button
                       key={doc.id}
                       onClick={() => navigate('/result', { state: { analysisData: doc } })}
-                      className="w-full bg-white dark:bg-gray-800/50 border border-gray-100 dark:border-gray-800 rounded-xl p-4 flex items-center gap-4 hover:border-blue-200 dark:hover:border-blue-700 hover:shadow-md transition-all duration-200 text-left group"
+                      className="w-full bg-white border border-gray-100 rounded-xl p-4 flex items-center gap-4 hover:border-blue-200 hover:shadow-md transition-all duration-200 text-left group"
                     >
-                      <div className="w-10 h-10 rounded-xl bg-gray-50 dark:bg-gray-800 flex items-center justify-center flex-shrink-0 group-hover:bg-blue-50 dark:group-hover:bg-blue-900/20 transition-colors">
+                      <div className="w-10 h-10 rounded-xl bg-gray-50 flex items-center justify-center flex-shrink-0 group-hover:bg-blue-50 transition-colors">
                         <FileText className="w-5 h-5 text-gray-400 group-hover:text-blue-500 transition-colors" />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">
+                        <p className="text-sm font-semibold text-gray-900 truncate">
                           {doc.title}
                         </p>
                         <div className="flex items-center gap-2 mt-1">
