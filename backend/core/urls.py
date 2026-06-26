@@ -30,6 +30,16 @@ def health_check(request):
         connection.ensure_connection()
         details["db_connection"] = "ok"
         
+        # Check table columns
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT column_name FROM information_schema.columns WHERE table_name='contracts_document'")
+            details["columns"] = [row[0] for row in cursor.fetchall()]
+            
+        # Check applied migrations
+        from django.db.migrations.recorder import MigrationRecorder
+        applied = MigrationRecorder.Migration.objects.filter(app="contracts")
+        details["applied_migrations"] = [f"{m.name} (applied: {m.applied})" for m in applied]
+
         # Check tables
         details["user_count"] = User.objects.count()
         details["document_count"] = Document.objects.count()
