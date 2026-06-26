@@ -12,6 +12,6 @@ services:
     startCommand: gunicorn core.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --timeout 120
     envVars:
       - key: PYTHON_VERSION
-        value: "3.11.0"1
+        value: "3.11.0"
       - key: DEBUG
         value: "False"
