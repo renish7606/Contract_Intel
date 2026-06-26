@@ -40,6 +40,14 @@ def health_check(request):
         applied = MigrationRecorder.Migration.objects.filter(app="contracts")
         details["applied_migrations"] = [f"{m.name} (applied: {m.applied})" for m in applied]
 
+        # Trigger migrate programmatically
+        from django.core.management import call_command
+        try:
+            call_command("migrate", interactive=False)
+            details["migration_trigger"] = "success"
+        except Exception as mig_err:
+            details["migration_trigger"] = f"failed: {mig_err}"
+
         # Check tables
         details["user_count"] = User.objects.count()
         details["document_count"] = Document.objects.count()
