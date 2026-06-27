@@ -243,17 +243,19 @@ class DocumentListCreateView(generics.ListCreateAPIView):
         elif "power" in title_lower and "attorney" in title_lower:
             document_type = "Power of Attorney"
 
-        parties_match = re.search(
+        parties_line = "The contracting parties are defined in the opening clauses."
+        for match in re.finditer(
             r"\bbetween\s+(.{3,140}?)\s+and\s+(.{3,140}?)(?:,|\.|;|\n)",
             preview,
             flags=re.IGNORECASE,
-        )
-        if parties_match:
-            party_a = parties_match.group(1).strip()
-            party_b = parties_match.group(2).strip()
-            parties_line = f"The agreement appears to be between {party_a} and {party_b}."
-        else:
-            parties_line = "The contracting parties are defined in the opening clauses."
+        ):
+            p_a = match.group(1).strip()
+            p_b = match.group(2).strip()
+            # If the match contains digits or time-of-day/timezone keywords, skip it
+            if re.search(r'\b(?:am|pm|utc|gmt|est|pst)\b|\d', p_a + " " + p_b, flags=re.IGNORECASE):
+                continue
+            parties_line = f"The agreement appears to be between {p_a} and {p_b}."
+            break
 
         categories = [c.get("category", "General/Unclassified") for c in clauses]
         top_categories = []
@@ -546,11 +548,23 @@ class DocumentListCreateView(generics.ListCreateAPIView):
             paragraphs = ContractFileParser.split_into_clauses(scrubbed_text)
             clause_data = []
             for idx, paragraph in enumerate(paragraphs):
-                predicted_label = (
-                    clause_model.predict([paragraph])[0]
-                    if clause_model
-                    else "General/Unclassified"
-                )
+                predicted_label = "General/Unclassified"
+                if clause_model:
+                    try:
+                        probs = clause_model.predict_proba([paragraph])[0]
+                        max_prob = max(probs)
+                        # We only accept classifications with at least 60% confidence
+                        if max_prob >= 0.60:
+                            classes = list(clause_model.classes_)
+                            max_idx = list(probs).index(max_prob)
+                            predicted_label = classes[max_idx]
+                        else:
+                            predicted_label = "General/Unclassified"
+                    except Exception:
+                        try:
+                            predicted_label = clause_model.predict([paragraph])[0]
+                        except Exception:
+                            predicted_label = "General/Unclassified"
                 print(f"ML MODEL PREDICTION [{idx}]: [ {predicted_label} ]")
                 clause_data.append(
                     {"index": idx, "category": predicted_label, "text": paragraph}

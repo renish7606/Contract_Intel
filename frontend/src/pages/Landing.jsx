@@ -284,6 +284,28 @@ export default function Landing() {
       </section>
 
       {/* ════════════════════════════════════════════════════════════
+          SECTION 4.5 — FINAL CTA
+          ════════════════════════════════════════════════════════════ */}
+      <section className="py-20 bg-gradient-to-b from-white to-gray-50 border-t border-gray-100">
+        <div className="max-w-4xl mx-auto px-6 text-center space-y-6">
+          <h2 className="text-3xl font-bold text-gray-900">
+            Ready to understand your contract?
+          </h2>
+          <p className="text-gray-500 max-w-lg mx-auto text-sm">
+            Analyze any contract instantly, scrub PII automatically, and get simple risk scores.
+          </p>
+          <div className="pt-2">
+            <button
+              onClick={handleCTA}
+              className="inline-flex items-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold px-8 py-3.5 rounded-full shadow-md hover:shadow-lg transition-all transform hover:-translate-y-0.5"
+            >
+              Analyse Free <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {/* ════════════════════════════════════════════════════════════
           SECTION 5 — FOOTER
           ════════════════════════════════════════════════════════════ */}
       <footer className="border-t border-gray-100 py-10">

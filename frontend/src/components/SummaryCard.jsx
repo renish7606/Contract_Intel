@@ -46,6 +46,7 @@ export default function SummaryCard({ data }) {
   const mediumClauses = clauses.filter((c) => c.risk_level === 'MEDIUM');
   const standardClauses = clauses.filter((c) => c.risk_level === 'LOW');
   const criticalAndMedium = [...criticalClauses, ...mediumClauses];
+  const uniqueStandardCategories = Array.from(new Set(standardClauses.map((c) => c.category)));
 
   // Build a plain-text summary for clipboard
   const buildPlainText = () => {
@@ -61,7 +62,7 @@ export default function SummaryCard({ data }) {
     }
     if (standardClauses.length > 0) {
       text += `STANDARD CLAUSES (${standardClauses.length}):\n`;
-      text += standardClauses.map((c) => c.category).join(' · ');
+      text += uniqueStandardCategories.join(' · ');
     }
     return text;
   };
@@ -153,7 +154,7 @@ export default function SummaryCard({ data }) {
       doc.setFontSize(13);
       doc.text(`Standard Clauses (${standardClauses.length})`, margin, y);
       y += 18;
-      addWrapped(standardClauses.map((c) => c.category).join(' · '), 10, 13);
+      addWrapped(uniqueStandardCategories.join(' · '), 10, 13);
     }
 
     doc.save(`ContractIntel_Report_${(title || 'contract').replace(/[^a-zA-Z0-9]/g, '_')}.pdf`);
@@ -266,19 +267,19 @@ export default function SummaryCard({ data }) {
 
             {!standardExpanded && (
               <p className="mt-2 text-xs text-gray-500 leading-relaxed">
-                {standardClauses.slice(0, 5).map((c) => c.category).join(' · ')}
-                {standardClauses.length > 5 && ` + ${standardClauses.length - 5} more`}
+                {uniqueStandardCategories.slice(0, 5).join(' · ')}
+                {uniqueStandardCategories.length > 5 && ` + ${uniqueStandardCategories.length - 5} more`}
               </p>
             )}
 
             {standardExpanded && (
               <div className="mt-3 flex flex-wrap gap-2">
-                {standardClauses.map((clause, i) => (
+                {uniqueStandardCategories.map((cat, i) => (
                   <span
-                    key={clause.id || i}
+                    key={i}
                     className="inline-flex items-center gap-1 bg-gray-50 border border-gray-100 rounded-full px-3 py-1.5 text-xs font-medium text-gray-600"
                   >
-                    {clause.category}
+                    {cat}
                   </span>
                 ))}
               </div>
@@ -302,17 +303,24 @@ export default function SummaryCard({ data }) {
           </p>
         </div>
 
-        {/* ── Analysis Mode Badge ────────────────────────────── */}
+        {/* ── Analysis Mode Badge & Description ────────────────── */}
         {analysis_mode && (
-          <div className="flex items-center gap-2">
-            <Shield className="w-3.5 h-3.5 text-gray-400" />
-            <span className={`text-[10px] font-semibold px-2.5 py-1 rounded-full border ${
-              analysis_mode === 'AI'
-                ? 'bg-blue-50 text-blue-700 border-blue-200'
-                : 'bg-amber-50 text-amber-700 border-amber-200'
-            }`}>
-              {analysis_mode === 'AI' ? 'AI Analysis Mode' : 'Local Analysis Mode (AI unavailable)'}
-            </span>
+          <div className="space-y-1.5 pt-1">
+            <div className="flex items-center gap-2">
+              <Shield className="w-3.5 h-3.5 text-gray-400" />
+              <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full border ${
+                analysis_mode === 'AI'
+                  ? 'bg-blue-50 text-blue-700 border-blue-200'
+                  : 'bg-amber-50 text-amber-700 border-amber-200'
+              }`}>
+                {analysis_mode === 'AI' ? 'AI Analysis Mode' : 'Local Analysis Mode (AI unavailable)'}
+              </span>
+            </div>
+            <p className="text-[11px] text-gray-400 leading-normal max-w-md">
+              {analysis_mode === 'AI'
+                ? 'Gemini analyzed your contract clauses for precision risk scoring and plain-English summaries.'
+                : 'Processed locally using rule-based classifiers and heuristics because the Gemini API is currently unavailable.'}
+            </p>
           </div>
         )}
       </div>

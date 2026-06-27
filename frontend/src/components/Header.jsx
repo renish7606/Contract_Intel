@@ -144,7 +144,7 @@ export default function Header() {
                   shape="pill"
                   size="medium"
                   text="signin_with"
-                  theme="outline"
+                  theme="filled_blue"
                   width="200"
                 />
               </div>
@@ -214,7 +214,7 @@ export default function Header() {
                   shape="pill"
                   size="large"
                   text="signin_with"
-                  theme="outline"
+                  theme="filled_blue"
                   width="100%"
                 />
               </div>
