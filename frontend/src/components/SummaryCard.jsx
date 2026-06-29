@@ -1,25 +1,51 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, CheckCircle, ChevronDown, ChevronUp, Download, Copy, Upload, FileText, Shield } from 'lucide-react';
+import {
+  AlertTriangle,
+  CheckCircle,
+  ChevronDown,
+  ChevronUp,
+  Copy,
+  Download,
+  FileText,
+  Shield,
+  Upload,
+} from 'lucide-react';
 import { jsPDF } from 'jspdf';
 
 const RISK_STYLES = {
   HIGH: {
     badge: 'bg-red-100 text-red-700 border-red-200',
-    icon: '⚠️',
     label: 'HIGH RISK',
   },
   MEDIUM: {
     badge: 'bg-yellow-100 text-yellow-700 border-yellow-200',
-    icon: '⚡',
     label: 'MEDIUM RISK',
   },
   LOW: {
     badge: 'bg-green-100 text-green-700 border-green-200',
-    icon: '✅',
     label: 'LOW RISK',
   },
 };
+
+const EMPTY_FACTS = {
+  contract_type: 'Not specified',
+  payment: 'Not specified',
+  duration: 'Not specified',
+  termination: 'Not specified',
+  dispute_resolution: 'Not specified',
+};
+
+function normalizeClause(clause) {
+  return {
+    name: clause.name || clause.category || 'Important Clause',
+    plain_explanation:
+      clause.plain_explanation ||
+      clause.simplified_text ||
+      'This means you should review this clause before signing.',
+    risk_level: (clause.risk_level || 'MEDIUM').toUpperCase(),
+  };
+}
 
 export default function SummaryCard({ data }) {
   const navigate = useNavigate();
@@ -31,39 +57,76 @@ export default function SummaryCard({ data }) {
   const {
     title,
     executive_summary,
+    summary,
     risk_score,
     overall_risk_score,
     clauses = [],
     analysis_mode,
   } = data;
 
-  // Derive risk label from risk_score or from overall_risk_score
-  const riskLabel = risk_score || (overall_risk_score >= 60 ? 'HIGH' : overall_risk_score >= 30 ? 'MEDIUM' : 'LOW');
+  const riskLabel =
+    risk_score ||
+    (overall_risk_score >= 60 ? 'HIGH' : overall_risk_score >= 30 ? 'MEDIUM' : 'LOW');
   const riskStyle = RISK_STYLES[riskLabel] || RISK_STYLES.LOW;
 
-  // Separate critical vs standard clauses
-  const criticalClauses = clauses.filter((c) => c.risk_level === 'HIGH');
-  const mediumClauses = clauses.filter((c) => c.risk_level === 'MEDIUM');
-  const standardClauses = clauses.filter((c) => c.risk_level === 'LOW');
-  const criticalAndMedium = [...criticalClauses, ...mediumClauses];
-  const uniqueStandardCategories = Array.from(new Set(standardClauses.map((c) => c.category)));
+  const summaryFacts = summary?.key_facts || {};
+  const contractSummary = {
+    plain_summary: summary?.plain_summary || executive_summary || '',
+    key_facts: { ...EMPTY_FACTS, ...summaryFacts },
+    critical_clauses: Array.isArray(summary?.critical_clauses)
+      ? summary.critical_clauses.map(normalizeClause)
+      : [],
+    verdict: summary?.verdict || '',
+  };
 
-  // Build a plain-text summary for clipboard
+  const highClauses = clauses.filter((clause) => clause.risk_level === 'HIGH');
+  const mediumClauses = clauses.filter((clause) => clause.risk_level === 'MEDIUM');
+  const standardClauses = clauses.filter((clause) => clause.risk_level === 'LOW');
+  const fallbackImportantClauses = [...highClauses, ...mediumClauses].map(normalizeClause);
+  const criticalAndMedium = (
+    contractSummary.critical_clauses.length > 0
+      ? contractSummary.critical_clauses
+      : fallbackImportantClauses
+  )
+    .filter((clause) => ['HIGH', 'MEDIUM'].includes(clause.risk_level))
+    .slice(0, 5);
+  const uniqueStandardCategories = Array.from(
+    new Set(standardClauses.map((clause) => clause.category)),
+  );
+
+  const factItems = [
+    { label: 'Contract Type', value: contractSummary.key_facts.contract_type },
+    { label: 'Payment', value: contractSummary.key_facts.payment },
+    { label: 'Duration', value: contractSummary.key_facts.duration },
+    { label: 'Termination', value: contractSummary.key_facts.termination },
+    { label: 'Disputes', value: contractSummary.key_facts.dispute_resolution },
+  ];
+
+  const verdict =
+    contractSummary.verdict ||
+    (criticalAndMedium.length > 0
+      ? `This contract contains ${criticalAndMedium.length} clause${
+          criticalAndMedium.length !== 1 ? 's' : ''
+        } that should be reviewed before signing.`
+      : `This appears to be a standard contract with all ${clauses.length} clauses falling within normal risk parameters.`);
+
   const buildPlainText = () => {
-    let text = `CONTRACT SUMMARY — ${title || 'Uploaded Contract'}\n`;
+    let text = `CONTRACT SUMMARY - ${title || 'Uploaded Contract'}\n`;
     text += `Risk: ${riskLabel}\n\n`;
-    if (executive_summary) text += `${executive_summary}\n\n`;
+    if (contractSummary.plain_summary) text += `${contractSummary.plain_summary}\n\n`;
+    text += 'KEY FACTS:\n';
+    factItems.forEach((fact) => {
+      text += `- ${fact.label}: ${fact.value}\n`;
+    });
+    text += '\n';
     if (criticalAndMedium.length > 0) {
       text += `CRITICAL/MEDIUM CLAUSES (${criticalAndMedium.length}):\n`;
-      criticalAndMedium.forEach((c) => {
-        text += `• ${c.category} [${c.risk_level}] — ${c.simplified_text}\n`;
+      criticalAndMedium.forEach((clause) => {
+        text += `- ${clause.name} [${clause.risk_level}] - ${clause.plain_explanation}\n`;
       });
       text += '\n';
     }
-    if (standardClauses.length > 0) {
-      text += `STANDARD CLAUSES (${standardClauses.length}):\n`;
-      text += uniqueStandardCategories.join(' · ');
-    }
+    text += `VERDICT:\n${verdict}`;
     return text;
   };
 
@@ -102,7 +165,6 @@ export default function SummaryCard({ data }) {
       });
     };
 
-    // Branded cover header
     doc.setFillColor(28, 52, 146);
     doc.rect(0, 0, pageWidth, 90, 'F');
     doc.setTextColor(255, 255, 255);
@@ -123,114 +185,127 @@ export default function SummaryCard({ data }) {
     doc.setTextColor(0);
     y += 30;
 
-    // Executive Summary
-    if (executive_summary) {
+    if (contractSummary.plain_summary) {
       doc.setFontSize(13);
-      doc.text('Executive Summary', margin, y);
+      doc.text('What This Contract Says', margin, y);
       y += 18;
-      addWrapped(executive_summary, 10.5, 14);
+      addWrapped(contractSummary.plain_summary, 10.5, 14);
       y += 10;
     }
 
-    // Critical Clauses
+    ensureSpace(30);
+    doc.setFontSize(13);
+    doc.text('Key Facts', margin, y);
+    y += 18;
+    factItems.forEach((fact) => {
+      addWrapped(`${fact.label}: ${fact.value}`, 10, 13);
+    });
+    y += 8;
+
     if (criticalAndMedium.length > 0) {
       ensureSpace(30);
       doc.setFontSize(13);
-      doc.text(`Critical & Medium Risk Clauses (${criticalAndMedium.length})`, margin, y);
+      doc.text(`Critical Clauses (${criticalAndMedium.length})`, margin, y);
       y += 18;
-      criticalAndMedium.forEach((clause, i) => {
+      criticalAndMedium.forEach((clause, index) => {
         ensureSpace(50);
         doc.setFontSize(11);
-        doc.text(`${i + 1}. ${clause.category} [${clause.risk_level}]`, margin, y);
+        doc.text(`${index + 1}. ${clause.name} [${clause.risk_level}]`, margin, y);
         y += 14;
-        addWrapped(clause.simplified_text, 10, 13);
+        addWrapped(clause.plain_explanation, 10, 13);
         y += 6;
       });
     }
 
-    // Standard Clauses
-    if (standardClauses.length > 0) {
-      ensureSpace(30);
-      doc.setFontSize(13);
-      doc.text(`Standard Clauses (${standardClauses.length})`, margin, y);
-      y += 18;
-      addWrapped(uniqueStandardCategories.join(' · '), 10, 13);
-    }
+    ensureSpace(30);
+    doc.setFontSize(13);
+    doc.text('Plain-English Verdict', margin, y);
+    y += 18;
+    addWrapped(verdict, 10, 13);
 
     doc.save(`ContractIntel_Report_${(title || 'contract').replace(/[^a-zA-Z0-9]/g, '_')}.pdf`);
   };
 
   return (
     <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden">
-      {/* ── Card Header ──────────────────────────────────────── */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-gray-50/50">
+      <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-gray-50/50 gap-4">
         <div className="flex items-center gap-3 min-w-0">
           <FileText className="w-5 h-5 text-blue-500 flex-shrink-0" />
           <div className="min-w-0">
-            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Contract Summary</p>
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">
+              Contract Summary
+            </p>
             <p className="text-sm font-semibold text-gray-900 truncate">
               {title || 'Uploaded Contract'}
             </p>
           </div>
         </div>
-        <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-bold flex-shrink-0 ${riskStyle.badge}`}>
-          <span>{riskStyle.icon}</span>
+        <div
+          className={`flex items-center px-3 py-1.5 rounded-full border text-xs font-bold flex-shrink-0 ${riskStyle.badge}`}
+        >
           {riskStyle.label}
         </div>
       </div>
 
       <div className="px-6 py-5 space-y-6">
-        {/* ── What This Contract Is ──────────────────────────── */}
-        {executive_summary && (
-          <div>
-            <h4 className="flex items-center gap-2 text-sm font-bold text-gray-900 mb-2">
-              📋 What This Contract Is
-            </h4>
-            <div className="text-sm text-gray-600 leading-relaxed space-y-1">
-              {executive_summary.split('\n').filter(Boolean).map((line, i) => (
-                <p key={i}>{line}</p>
-              ))}
-            </div>
+        {contractSummary.plain_summary && (
+          <div className="bg-white rounded-xl p-6 border border-gray-100 shadow-sm">
+            <h2 className="text-base font-semibold text-gray-900 mb-3">
+              What This Contract Says
+            </h2>
+            <p className="max-w-5xl text-gray-800 text-base sm:text-[17px] leading-8 font-normal">
+              {contractSummary.plain_summary}
+            </p>
           </div>
         )}
 
-        {/* ── Critical Clauses ───────────────────────────────── */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {factItems.map((fact) => (
+            <div
+              key={fact.label}
+              className="bg-gray-50 rounded-lg p-3 border border-gray-100 min-w-0"
+            >
+              <span className="text-xs text-gray-500">{fact.label}</span>
+              <p className="text-sm font-medium text-gray-800 mt-1 break-words">
+                {fact.value}
+              </p>
+            </div>
+          ))}
+        </div>
+
         {criticalAndMedium.length > 0 ? (
           <div>
             <h4 className="flex items-center gap-2 text-sm font-bold text-gray-900 mb-3">
               <AlertTriangle className="w-4 h-4 text-amber-500" />
-              Critical Clauses to Review ({criticalAndMedium.length} found)
+              Critical Clauses to Review ({criticalAndMedium.length} shown)
             </h4>
             <div className="space-y-3">
-              {criticalAndMedium.map((clause, i) => (
+              {criticalAndMedium.map((clause, index) => (
                 <div
-                  key={clause.id || i}
+                  key={`${clause.name}-${index}`}
                   className={`border rounded-xl p-4 ${
                     clause.risk_level === 'HIGH'
                       ? 'border-red-200 bg-red-50/30'
                       : 'border-yellow-200 bg-yellow-50/30'
                   }`}
                 >
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-bold text-gray-800">
-                      {clause.category}
+                  <div className="flex items-center justify-between gap-3 mb-2">
+                    <span className="text-xs font-bold text-gray-800 break-words">
+                      {clause.name}
                     </span>
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                      clause.risk_level === 'HIGH'
-                        ? 'bg-red-100 text-red-700 border-red-200'
-                        : 'bg-yellow-100 text-yellow-700 border-yellow-200'
-                    }`}>
+                    <span
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded-full border flex-shrink-0 ${
+                        clause.risk_level === 'HIGH'
+                          ? 'bg-red-100 text-red-700 border-red-200'
+                          : 'bg-yellow-100 text-yellow-700 border-yellow-200'
+                      }`}
+                    >
                       {clause.risk_level}
                     </span>
                   </div>
                   <p className="text-xs text-gray-600 leading-relaxed">
-                    {clause.simplified_text}
+                    {clause.plain_explanation}
                   </p>
-                  {clause.risk_explanation && (
-                    <p className="mt-2 text-[11px] text-gray-400 italic">
-                      {clause.risk_explanation}
-                    </p>
-                  )}
                 </div>
               ))}
             </div>
@@ -249,7 +324,6 @@ export default function SummaryCard({ data }) {
           </div>
         )}
 
-        {/* ── Standard Clauses (collapsed) ───────────────────── */}
         {standardClauses.length > 0 && (
           <div>
             <button
@@ -267,19 +341,20 @@ export default function SummaryCard({ data }) {
 
             {!standardExpanded && (
               <p className="mt-2 text-xs text-gray-500 leading-relaxed">
-                {uniqueStandardCategories.slice(0, 5).join(' · ')}
-                {uniqueStandardCategories.length > 5 && ` + ${uniqueStandardCategories.length - 5} more`}
+                {uniqueStandardCategories.slice(0, 5).join(' / ')}
+                {uniqueStandardCategories.length > 5 &&
+                  ` + ${uniqueStandardCategories.length - 5} more`}
               </p>
             )}
 
             {standardExpanded && (
               <div className="mt-3 flex flex-wrap gap-2">
-                {uniqueStandardCategories.map((cat, i) => (
+                {uniqueStandardCategories.map((category) => (
                   <span
-                    key={i}
+                    key={category}
                     className="inline-flex items-center gap-1 bg-gray-50 border border-gray-100 rounded-full px-3 py-1.5 text-xs font-medium text-gray-600"
                   >
-                    {cat}
+                    {category}
                   </span>
                 ))}
               </div>
@@ -287,33 +362,27 @@ export default function SummaryCard({ data }) {
           </div>
         )}
 
-        {/* ── Plain-English Verdict ──────────────────────────── */}
         <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
           <h4 className="flex items-center gap-2 text-sm font-bold text-gray-900 mb-2">
-            💡 Plain-English Verdict
+            Plain-English Verdict
           </h4>
-          <p className="text-sm text-gray-700 leading-relaxed italic">
-            {criticalAndMedium.length > 0
-              ? `This contract contains ${criticalAndMedium.length} clause${criticalAndMedium.length !== 1 ? 's' : ''} that warrant${criticalAndMedium.length === 1 ? 's' : ''} careful review before signing. ${
-                  criticalClauses.length > 0
-                    ? `The ${criticalClauses[0]?.category || 'flagged'} clause is particularly noteworthy.`
-                    : 'No critical-risk clauses were found, but medium-risk items should still be reviewed.'
-                }`
-              : `This appears to be a standard contract with all ${clauses.length} clauses falling within normal risk parameters. No items require immediate legal attention.`}
-          </p>
+          <p className="text-sm text-gray-700 leading-relaxed italic">{verdict}</p>
         </div>
 
-        {/* ── Analysis Mode Badge & Description ────────────────── */}
         {analysis_mode && (
           <div className="space-y-1.5 pt-1">
             <div className="flex items-center gap-2">
               <Shield className="w-3.5 h-3.5 text-gray-400" />
-              <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full border ${
-                analysis_mode === 'AI'
-                  ? 'bg-blue-50 text-blue-700 border-blue-200'
-                  : 'bg-amber-50 text-amber-700 border-amber-200'
-              }`}>
-                {analysis_mode === 'AI' ? 'AI Analysis Mode' : 'Local Analysis Mode (AI unavailable)'}
+              <span
+                className={`text-[10px] font-bold px-2.5 py-1 rounded-full border ${
+                  analysis_mode === 'AI'
+                    ? 'bg-blue-50 text-blue-700 border-blue-200'
+                    : 'bg-amber-50 text-amber-700 border-amber-200'
+                }`}
+              >
+                {analysis_mode === 'AI'
+                  ? 'AI Analysis Mode'
+                  : 'Local Analysis Mode (AI unavailable)'}
               </span>
             </div>
             <p className="text-[11px] text-gray-400 leading-normal max-w-md">
@@ -325,11 +394,10 @@ export default function SummaryCard({ data }) {
         )}
       </div>
 
-      {/* ── Action Buttons ────────────────────────────────────── */}
-      <div className="flex items-center gap-3 px-6 py-4 border-t border-gray-100 bg-gray-50/50">
+      <div className="flex flex-wrap items-center gap-3 px-6 py-4 border-t border-gray-100 bg-gray-50/50">
         <button
           onClick={handleDownloadPDF}
-          className="inline-flex items-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white px-4 py-2 rounded-full text-xs font-semibold shadow-sm hover:shadow-md transition-all"
+          className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-full text-xs font-semibold shadow-sm hover:shadow-md transition-all"
         >
           <Download className="w-3.5 h-3.5" />
           Download Report PDF

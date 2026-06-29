@@ -106,12 +106,12 @@ if HAS_WHITENOISE:
 
 # Cross-Origin Resource Sharing (CORS)
 CORS_ALLOWED_ORIGINS = [
+    "https://contract-intel-omega.vercel.app",
     "http://localhost:5173",
     "http://localhost:3000",
-    "https://contract-intel-omega.vercel.app",
     "https://contract-intel-c4wibwikc-renishpatel1717-9029s-projects.vercel.app",
 ]
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_CREDENTIALS = True
 
 ROOT_URLCONF = 'core.urls'

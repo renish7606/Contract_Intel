@@ -45,6 +45,51 @@ GEMINI_MODEL_CANDIDATES = list(dict.fromkeys(GEMINI_MODEL_CANDIDATES))
 MAX_BATCH_CLAUSES = 25
 MAX_CLAUSE_CHARS_FOR_AI = 350
 
+SUMMARY_PROMPT = """
+You are a legal assistant helping non-lawyers understand contracts.
+Analyse the following contract text and return ONLY a JSON object - no preamble, no explanation, no markdown.
+
+Extract the actual specific facts from the contract. Do NOT use generic phrases like
+"legal and commercial obligations" or "as defined in the opening clauses".
+If information is not found, write "Not specified" - never guess or use placeholders.
+
+Return this exact JSON structure:
+
+{
+  "plain_summary": "Write 3-4 sentences in plain English that a non-lawyer can understand. Include: (1) what type of agreement this is and who the parties are, (2) what service or work is involved and the payment amount if mentioned, (3) how long the contract lasts and how it can be ended, (4) where disputes are resolved. Use simple words. No legal jargon. Copy the style of this example: 'This agreement is between a software provider and a client for software testing work. The provider will be paid USD 4,500 per month and must keep the client's information private. The contract lasts 12 months and can be ended with 30 days notice. Any disputes will be settled through arbitration in Chicago under Illinois law.'",
+
+  "key_facts": {
+    "contract_type": "one phrase, e.g. Service Agreement, NDA, Employment Contract, Lease Agreement",
+    "party_1": "what type of entity Party 1 is, e.g. software service provider, landlord, employer",
+    "party_2": "what type of entity Party 2 is, e.g. client, tenant, employee",
+    "payment": "exact payment amount and frequency if mentioned, e.g. USD 4,500 per month. Write Not specified if absent.",
+    "duration": "contract length, e.g. 12 months, 2 years, indefinite",
+    "termination": "how the contract can be ended, e.g. 30 days written notice by either party",
+    "dispute_resolution": "how disputes are handled and where, e.g. arbitration in Chicago, Illinois under Illinois law"
+  },
+
+  "critical_clauses": [
+    {
+      "name": "clause name in plain English",
+      "plain_explanation": "1-2 sentences explaining what this clause means for the person signing. Start with 'This means...' or 'This clause says...'",
+      "risk_level": "HIGH or MEDIUM"
+    }
+  ],
+
+  "verdict": "1-2 sentences. The single most important thing this person should know before signing. Be direct and specific."
+}
+
+RULES FOR critical_clauses:
+- Include MAXIMUM 5 clauses. Choose only the ones that genuinely affect the person's rights or money.
+- Only include HIGH risk if the clause: limits liability severely, assigns IP broadly, has auto-renewal traps, restricts what the person can do after the contract ends, or requires large indemnification.
+- MEDIUM risk: payment terms, termination penalties, confidentiality obligations, dispute location.
+- DO NOT include standard boilerplate: governing law choice, notice requirements, severability, entire agreement clauses.
+- Each plain_explanation must be specific to THIS contract's actual text, not generic.
+
+CONTRACT TEXT (PII has been removed and replaced with [REDACTED] tokens):
+{contract_text}
+"""
+
 ai_client = None
 if genai and types and GEMINI_API_KEY:
     try:
@@ -103,6 +148,167 @@ def calculate_risk_score(flagged_clauses: list) -> str:
     elif high_count >= 1:
         return "MEDIUM"
     return "LOW"
+
+
+def _extract_json_object(raw: str) -> dict:
+    cleaned = (raw or "").strip()
+    if cleaned.startswith("```"):
+        parts = cleaned.split("```")
+        cleaned = parts[1] if len(parts) > 1 else cleaned
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:]
+        cleaned = cleaned.strip()
+
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start >= 0 and end > start:
+        cleaned = cleaned[start : end + 1]
+    return json.loads(cleaned)
+
+
+def _plain_clause_explanation(clause: dict) -> str:
+    explanation = (
+        clause.get("plain_explanation")
+        or clause.get("simplified_text")
+        or clause.get("text")
+        or ""
+    )
+    explanation = re.sub(r"Local trigger matched[^.]*\.", "", explanation).strip()
+    if not explanation:
+        explanation = "This means you should review this clause before signing."
+    if not explanation.lower().startswith(("this means", "this clause says")):
+        explanation = f"This means {explanation[0].lower()}{explanation[1:]}"
+    return explanation
+
+
+def local_fallback_summary(contract_text: str, clause_classifications: dict) -> dict:
+    """
+    Fallback when Gemini times out. Extracts real facts using keyword/regex matching
+    instead of returning generic template text.
+    """
+    text_lower = (contract_text or "").lower()
+
+    payment = "Not specified"
+    payment_patterns = [
+        r'\$[\d,]+(?:\.\d{2})?(?:\s*(?:per\s+month|monthly|per\s+year|annually))?',
+        r'USD\s*[\d,]+(?:\.\d{2})?(?:\s*(?:per\s+month|monthly|per\s+year|annually))?',
+        r'[\d,]+(?:\.\d{2})?\s*(?:dollars|USD)(?:\s*(?:per\s+month|monthly|per\s+year|annually))?',
+    ]
+    for pattern in payment_patterns:
+        match = re.search(pattern, contract_text or "", re.IGNORECASE)
+        if match:
+            payment = match.group(0).strip()
+            break
+
+    duration = "Not specified"
+    duration_patterns = [
+        r'(?:term|period|duration)[^.]*?(\d+)\s*(month|year|week)',
+        r'(\d+)[- ](month|year)[^.]*?(?:term|period|agreement)',
+        r'for\s+a\s+period\s+of\s+(\d+)\s+(month|year)',
+    ]
+    for pattern in duration_patterns:
+        match = re.search(pattern, text_lower)
+        if match:
+            unit = match.group(2)
+            suffix = "" if match.group(1) == "1" or unit.endswith("s") else "s"
+            duration = f"{match.group(1)} {unit}{suffix}"
+            break
+
+    termination = "Not specified"
+    term_match = re.search(r'(\d+)[- ]day[s]?\s+(?:written\s+)?notice', text_lower)
+    if term_match:
+        termination = f"{term_match.group(1)} days written notice"
+
+    dispute = "Not specified"
+    if "arbitration" in text_lower:
+        dispute = "Arbitration"
+        juris_match = re.search(
+            r'arbitration\s+in\s+([A-Z][a-zA-Z\s,]+?)(?:\.|,|\s+under)',
+            contract_text or "",
+        )
+        if juris_match:
+            dispute = f"Arbitration in {juris_match.group(1).strip()}"
+    elif "court" in text_lower:
+        dispute = "Court proceedings"
+
+    contract_type = "Legal Agreement"
+    if "non-disclosure" in text_lower or "confidentiality agreement" in text_lower:
+        contract_type = "Non-Disclosure Agreement"
+    elif "service agreement" in text_lower or "services agreement" in text_lower:
+        contract_type = "Service Agreement"
+    elif "employment" in text_lower:
+        contract_type = "Employment Contract"
+    elif "lease" in text_lower:
+        contract_type = "Lease Agreement"
+
+    clause_names = [
+        name for name, _count in sorted(
+            clause_classifications.items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        if name and name != "General/Unclassified"
+    ]
+
+    if contract_type == "Non-Disclosure Agreement":
+        facts = [
+            "This is a non-disclosure agreement between the parties, meaning it is mainly about keeping shared information private.",
+            "The person or company receiving confidential information must protect it, use it only for the allowed business purpose, and avoid sharing it without permission.",
+        ]
+    elif contract_type == "Service Agreement":
+        facts = [
+            "This is a service agreement between a service provider and a client.",
+            "It explains the work or services to be provided and the main responsibilities each side accepts.",
+        ]
+    elif contract_type == "Employment Contract":
+        facts = [
+            "This is an employment contract between an employer and an employee.",
+            "It explains the work relationship, duties, and important rules the employee must follow.",
+        ]
+    elif contract_type == "Lease Agreement":
+        facts = [
+            "This is a lease agreement between a property owner and a tenant.",
+            "It explains the tenant's right to use the property and the main duties for rent, care of the property, and compliance with lease rules.",
+        ]
+    else:
+        facts = [
+            "This is a legal agreement between the parties.",
+            "It explains important rights, responsibilities, and restrictions that apply after the document is signed.",
+        ]
+
+    timing_parts = []
+    if payment != "Not specified":
+        timing_parts.append(f"the payment term found is {payment}")
+    else:
+        timing_parts.append("no payment amount was found in the extracted text")
+    if duration != "Not specified":
+        timing_parts.append(f"it runs for {duration}")
+    if termination != "Not specified":
+        timing_parts.append(f"it can be ended with {termination}")
+    if duration == "Not specified" and termination == "Not specified":
+        timing_parts.append("no fixed contract length or specific termination notice period was found")
+    facts.append(f"For money and timing, {'; '.join(timing_parts)}.")
+
+    if dispute != "Not specified":
+        facts.append(f"If there is a dispute, it is handled through {dispute}.")
+    else:
+        facts.append("The extracted text does not clearly say where disputes must be resolved.")
+
+    return {
+        "plain_summary": " ".join(facts[:4]),
+        "key_facts": {
+            "contract_type": contract_type,
+            "party_1": "Party as defined in contract",
+            "party_2": "Counterparty as defined in contract",
+            "payment": payment,
+            "duration": duration,
+            "termination": termination,
+            "dispute_resolution": dispute,
+        },
+        "critical_clauses": [],
+        "verdict": "Review payment, termination, confidentiality, liability, and dispute terms before signing.",
+        "source": "local_fallback",
+    }
 
 
 class GoogleLoginView(APIView):
@@ -230,58 +436,96 @@ class DocumentListCreateView(generics.ListCreateAPIView):
         return baseline_map.get(category_key)
 
     @staticmethod
-    def _generate_executive_summary(title: str, scrubbed_text: str, clauses: list, overall_score: int) -> str:
-        text = " ".join((scrubbed_text or "").split())
-        preview = text[:2500]
+    def _generate_ai_contract_summary(scrubbed_text: str) -> dict:
+        if not ai_client:
+            raise RuntimeError("Gemini client is not initialized.")
 
-        document_type = "Contract"
-        title_lower = (title or "").lower()
-        if "nda" in title_lower:
-            document_type = "Non-Disclosure Agreement"
-        elif "service" in title_lower:
-            document_type = "Service Agreement"
-        elif "power" in title_lower and "attorney" in title_lower:
-            document_type = "Power of Attorney"
+        prompt = SUMMARY_PROMPT.replace("{contract_text}", (scrubbed_text or "")[:12000])
+        last_error = None
+        for candidate in GEMINI_MODEL_CANDIDATES:
+            model_name = candidate if candidate.startswith("models/") else f"models/{candidate}"
+            try:
+                response = ai_client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                )
+                return _extract_json_object(response.text or "")
+            except Exception as err:
+                last_error = err
+                print(f"Gemini summary attempt failed ({model_name}): {err}")
+        raise RuntimeError(f"All Gemini summary candidates failed. Last error: {last_error}")
 
-        parties_line = "The contracting parties are defined in the opening clauses."
-        for match in re.finditer(
-            r"\bbetween\s+(.{3,140}?)\s+and\s+(.{3,140}?)(?:,|\.|;|\n)",
-            preview,
-            flags=re.IGNORECASE,
-        ):
-            p_a = match.group(1).strip()
-            p_b = match.group(2).strip()
-            # If the match contains digits or time-of-day/timezone keywords, skip it
-            if re.search(r'\b(?:am|pm|utc|gmt|est|pst)\b|\d', p_a + " " + p_b, flags=re.IGNORECASE):
-                continue
-            parties_line = f"The agreement appears to be between {p_a} and {p_b}."
-            break
+    @staticmethod
+    def _build_contract_summary(scrubbed_text: str, clauses: list, analysis_mode: str) -> dict:
+        clause_counts = {}
+        for clause in clauses:
+            category = clause.get("category") or "General/Unclassified"
+            clause_counts[category] = clause_counts.get(category, 0) + 1
 
-        categories = [c.get("category", "General/Unclassified") for c in clauses]
-        top_categories = []
-        for cat in categories:
-            if cat not in top_categories:
-                top_categories.append(cat)
-            if len(top_categories) == 3:
-                break
-        purpose_line = (
-            f"It mainly covers {', '.join(top_categories)} terms."
-            if top_categories
-            else "It defines core legal rights, obligations, and governance terms."
+        fallback_summary = local_fallback_summary(scrubbed_text, clause_counts)
+        summary = dict(fallback_summary)
+        if ai_client and analysis_mode == "AI":
+            executor = ThreadPoolExecutor(max_workers=1)
+            future = executor.submit(
+                DocumentListCreateView._generate_ai_contract_summary,
+                scrubbed_text,
+            )
+            try:
+                ai_summary = future.result(timeout=6)
+                if isinstance(ai_summary, dict):
+                    summary.update(ai_summary)
+                    summary["source"] = "gemini"
+            except FuturesTimeoutError:
+                print("Gemini summary exceeded 6s timeout - using local summary.")
+            except Exception as err:
+                print(f"Gemini summary failed - using local summary: {err}")
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
+
+        key_facts = summary.get("key_facts") if isinstance(summary.get("key_facts"), dict) else {}
+        default_facts = fallback_summary["key_facts"]
+        summary["key_facts"] = {**default_facts, **key_facts}
+        sentence_count = len(re.findall(r"[.!?](?:\s|$)", summary.get("plain_summary") or ""))
+        if sentence_count < 3:
+            summary["plain_summary"] = fallback_summary["plain_summary"]
+
+        if not summary.get("critical_clauses"):
+            risk_order = {"HIGH": 0, "MEDIUM": 1}
+            important = [
+                clause for clause in clauses
+                if (clause.get("risk_level") or "").upper() in risk_order
+                and (clause.get("category") or "").strip().lower() not in {
+                    "governing law",
+                    "notice",
+                    "notices",
+                    "severability",
+                    "entire agreement",
+                }
+            ]
+            important.sort(key=lambda c: risk_order[(c.get("risk_level") or "").upper()])
+            summary["critical_clauses"] = [
+                {
+                    "name": clause.get("category") or "Important Clause",
+                    "plain_explanation": _plain_clause_explanation(clause),
+                    "risk_level": (clause.get("risk_level") or "MEDIUM").upper(),
+                }
+                for clause in important[:5]
+            ]
+        else:
+            summary["critical_clauses"] = [
+                {
+                    "name": clause.get("name") or clause.get("category") or "Important Clause",
+                    "plain_explanation": _plain_clause_explanation(clause),
+                    "risk_level": (clause.get("risk_level") or "MEDIUM").upper(),
+                }
+                for clause in summary["critical_clauses"]
+                if (clause.get("risk_level") or "").upper() in {"HIGH", "MEDIUM"}
+            ][:5]
+
+        summary["verdict"] = summary.get("verdict") or (
+            "Review the flagged clauses before signing, especially any terms that affect payment, termination, liability, confidentiality, or dispute handling."
         )
-
-        risk_band = "low"
-        if overall_score >= 60:
-            risk_band = "high"
-        elif overall_score >= 30:
-            risk_band = "moderate"
-        risk_line = (
-            f"Overall risk profile is {risk_band} (score: {overall_score}/100), "
-            "so priority clauses should be reviewed first."
-        )
-
-        intro_line = f"This document is a {document_type} outlining legal and commercial obligations."
-        return "\n".join([intro_line, parties_line, purpose_line, risk_line])
+        return summary
 
     @staticmethod
     def _batch_simplify_clauses(clause_data: list) -> list:
@@ -587,7 +831,8 @@ class DocumentListCreateView(generics.ListCreateAPIView):
                         )
 
                     # ── Hard 18-second timeout so Render's 30s proxy limit is never hit ──
-                    with ThreadPoolExecutor(max_workers=1) as executor:
+                    executor = ThreadPoolExecutor(max_workers=1)
+                    try:
                         future = executor.submit(
                             self._batch_simplify_clauses, compact_clause_data
                         )
@@ -606,6 +851,8 @@ class DocumentListCreateView(generics.ListCreateAPIView):
                                 print("Gemini quota exhausted — falling back to local analysis.")
                             else:
                                 print(f"Gemini batch call failed: {llm_err}")
+                    finally:
+                        executor.shutdown(wait=False, cancel_futures=True)
                 except Exception as outer_err:
                     print(f"AI processing setup failed: {outer_err}")
             else:
@@ -672,12 +919,22 @@ class DocumentListCreateView(generics.ListCreateAPIView):
 
             serializer = self.get_serializer(document)
             response_data = dict(serializer.data)
-            response_data["executive_summary"] = self._generate_executive_summary(
-                title=uploaded_file.name,
+            summary_clauses = [
+                {
+                    "category": clause.category,
+                    "simplified_text": clause.simplified_text,
+                    "risk_level": clause.risk_level,
+                    "risk_explanation": clause.risk_explanation,
+                }
+                for clause in clause_instances
+            ]
+            summary = self._build_contract_summary(
                 scrubbed_text=scrubbed_text,
-                clauses=clause_data,
-                overall_score=document.overall_risk_score or 0,
+                clauses=summary_clauses,
+                analysis_mode=analysis_mode,
             )
+            response_data["summary"] = summary
+            response_data["executive_summary"] = summary.get("plain_summary", "")
             response_data["risk_score"] = risk_score_label
             return Response(response_data, status=status.HTTP_201_CREATED)
 
