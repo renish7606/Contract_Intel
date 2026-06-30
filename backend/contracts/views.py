@@ -2,9 +2,11 @@ import os
 import json
 import re
 import joblib
+import logging
 import requests
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.db import IntegrityError, DatabaseError
 from rest_framework import generics, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -25,6 +27,7 @@ from .parser import ContractFileParser
 from .serializers import DocumentSerializer
 from .utils import PIIScrubber
 
+logger = logging.getLogger(__name__)
 scrubber = PIIScrubber()
 
 GEMINI_API_KEY = (
@@ -315,6 +318,18 @@ class GoogleLoginView(APIView):
     permission_classes = [AllowAny]
 
     @staticmethod
+    def _build_unique_username(email: str) -> str:
+        base = re.sub(r"[^a-zA-Z0-9_@.+-]", "_", email.split("@")[0] or "google_user")
+        base = base[:140]
+        username = base
+        counter = 1
+        while User.objects.filter(username=username).exists():
+            suffix = f"_{counter}"
+            username = f"{base[:150 - len(suffix)]}{suffix}"
+            counter += 1
+        return username
+
+    @staticmethod
     def _fetch_google_user_info(token: str, token_type: str) -> dict | None:
         """Verify a Google OAuth token and return user info."""
         try:
@@ -340,6 +355,33 @@ class GoogleLoginView(APIView):
 
         return response.json()
 
+    def _get_or_create_google_user(self, email: str, user_info: dict) -> User:
+        existing = User.objects.filter(email__iexact=email).order_by("id").first()
+        first_name = user_info.get("given_name", "") or user_info.get("name", "").split(" ")[0]
+        last_name = user_info.get("family_name", "")
+
+        if existing:
+            update_fields = []
+            if existing.email != email:
+                existing.email = email
+                update_fields.append("email")
+            if first_name and not existing.first_name:
+                existing.first_name = first_name[:150]
+                update_fields.append("first_name")
+            if last_name and not existing.last_name:
+                existing.last_name = last_name[:150]
+                update_fields.append("last_name")
+            if update_fields:
+                existing.save(update_fields=update_fields)
+            return existing
+
+        return User.objects.create_user(
+            username=self._build_unique_username(email),
+            email=email,
+            first_name=first_name[:150],
+            last_name=last_name[:150],
+        )
+
     def post(self, request):
         token = request.data.get("token") or request.data.get("access_token")
         token_type = request.data.get("token_type")
@@ -361,19 +403,26 @@ class GoogleLoginView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        user, _ = User.objects.get_or_create(
-            email=email,
-            defaults={
-                "username": email,
-                "first_name": user_info.get("given_name", ""),
-                "last_name": user_info.get("family_name", ""),
-            },
-        )
-
-        if not user.first_name and user_info.get("given_name"):
-            user.first_name = user_info.get("given_name", "")
-            user.last_name = user_info.get("family_name", user.last_name)
-            user.save(update_fields=["first_name", "last_name"])
+        try:
+            user = self._get_or_create_google_user(email=email, user_info=user_info)
+        except (IntegrityError, DatabaseError) as exc:
+            logger.exception("Google login database failure for %s", email)
+            return Response(
+                {
+                    "error": "Google sign-in reached the backend, but the user account could not be created. Please try again.",
+                    "detail": str(exc) if settings.DEBUG else "",
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        except Exception as exc:
+            logger.exception("Unexpected Google login failure for %s", email)
+            return Response(
+                {
+                    "error": "Google sign-in failed on the server. Please try again.",
+                    "detail": str(exc) if settings.DEBUG else "",
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
         refresh = RefreshToken.for_user(user)
         return Response(

@@ -68,7 +68,7 @@ export function AuthProvider({ children }) {
         picture: response.data.user?.picture || '',
       });
     } catch (error) {
-      console.error('Google sign-in failed:', error);
+      console.error('Google sign-in failed:', error.response?.data || error);
       const message = error.code === 'ERR_NETWORK'
         ? 'Backend could not be reached. Make sure the Django API is running or deployed, then try Google sign-in again.'
         : (error.response?.data?.error || 'Google sign-in failed. Please try again.');
