@@ -69,9 +69,13 @@ export function AuthProvider({ children }) {
       });
     } catch (error) {
       console.error('Google sign-in failed:', error.response?.data || error);
+      const backendError = error.response?.data;
       const message = error.code === 'ERR_NETWORK'
         ? 'Backend could not be reached. Make sure the Django API is running or deployed, then try Google sign-in again.'
-        : (error.response?.data?.error || 'Google sign-in failed. Please try again.');
+        : [
+            backendError?.error || 'Google sign-in failed. Please try again.',
+            backendError?.detail ? `Details: ${backendError.detail}` : '',
+          ].filter(Boolean).join('\n\n');
       alert(message);
     }
   }, []);

@@ -3,6 +3,7 @@ import json
 import re
 import joblib
 import logging
+import uuid
 import requests
 from django.conf import settings
 from django.contrib.auth.models import User
@@ -318,8 +319,10 @@ class GoogleLoginView(APIView):
     permission_classes = [AllowAny]
 
     @staticmethod
-    def _build_unique_username(email: str) -> str:
-        base = re.sub(r"[^a-zA-Z0-9_@.+-]", "_", email.split("@")[0] or "google_user")
+    def _build_unique_username(email: str, user_info: dict) -> str:
+        google_subject = user_info.get("sub")
+        raw_base = f"google_{google_subject}" if google_subject else email.split("@")[0]
+        base = re.sub(r"[^a-zA-Z0-9_@.+-]", "_", raw_base or "google_user")
         base = base[:140]
         username = base
         counter = 1
@@ -375,12 +378,18 @@ class GoogleLoginView(APIView):
                 existing.save(update_fields=update_fields)
             return existing
 
-        return User.objects.create_user(
-            username=self._build_unique_username(email),
-            email=email,
-            first_name=first_name[:150],
-            last_name=last_name[:150],
-        )
+        for _attempt in range(3):
+            username = self._build_unique_username(email, user_info)
+            try:
+                return User.objects.create_user(
+                    username=username,
+                    email=email,
+                    first_name=first_name[:150],
+                    last_name=last_name[:150],
+                )
+            except IntegrityError:
+                user_info = {**user_info, "sub": f"{user_info.get('sub') or 'user'}_{uuid.uuid4().hex[:8]}"}
+        raise IntegrityError("Could not create a unique username for Google user.")
 
     def post(self, request):
         token = request.data.get("token") or request.data.get("access_token")
@@ -410,7 +419,7 @@ class GoogleLoginView(APIView):
             return Response(
                 {
                     "error": "Google sign-in reached the backend, but the user account could not be created. Please try again.",
-                    "detail": str(exc) if settings.DEBUG else "",
+                    "detail": f"{exc.__class__.__name__}: {str(exc)[:180]}",
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
@@ -419,7 +428,7 @@ class GoogleLoginView(APIView):
             return Response(
                 {
                     "error": "Google sign-in failed on the server. Please try again.",
-                    "detail": str(exc) if settings.DEBUG else "",
+                    "detail": f"{exc.__class__.__name__}: {str(exc)[:180]}",
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
