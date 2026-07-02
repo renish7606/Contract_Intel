@@ -5,7 +5,7 @@ import { Shield, ChevronDown, LogOut, LayoutDashboard, Menu, X } from 'lucide-re
 import { useAuth } from '../context/AuthContext.jsx';
 
 export default function Header() {
-  const { user, isAuthenticated, handleGoogleLogin, logout } = useAuth();
+  const { user, isAuthenticated, handleGoogleLogin, logout, isSigningIn } = useAuth();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const dropdownRef = useRef(null);
@@ -137,16 +137,23 @@ export default function Header() {
               >
                 Privacy
               </button>
-              <div className="scale-90 origin-right">
-                <GoogleLogin
-                  onSuccess={handleGoogleLogin}
-                  onError={() => alert('Google sign-in failed. Please try again.')}
-                  shape="pill"
-                  size="medium"
-                  text="signin_with"
-                  theme="filled_blue"
-                  width="200"
-                />
+              <div className="flex flex-col items-end">
+                <div className="scale-90 origin-right">
+                  <GoogleLogin
+                    onSuccess={handleGoogleLogin}
+                    onError={() => alert('Google sign-in failed. Please try again.')}
+                    shape="pill"
+                    size="medium"
+                    text="signin_with"
+                    theme="filled_blue"
+                    width="200"
+                  />
+                </div>
+                {isSigningIn && (
+                  <p className="text-xs text-gray-500 mt-1 animate-pulse">
+                    Signing you in — this can take up to 30s...
+                  </p>
+                )}
               </div>
             </>
           )}
@@ -209,7 +216,7 @@ export default function Header() {
               </button>
               <div className="pt-2">
                 <GoogleLogin
-                  onSuccess={(cr) => { setMobileMenuOpen(false); handleGoogleLogin(cr); }}
+                  onSuccess={(cr) => { handleGoogleLogin(cr); }}
                   onError={() => alert('Google sign-in failed. Please try again.')}
                   shape="pill"
                   size="large"
@@ -217,6 +224,11 @@ export default function Header() {
                   theme="filled_blue"
                   width="100%"
                 />
+                {isSigningIn && (
+                  <p className="text-xs text-gray-500 mt-2 text-center animate-pulse">
+                    Signing you in — this can take up to 30s...
+                  </p>
+                )}
               </div>
             </>
           )}

@@ -12,6 +12,7 @@ export function useAuth() {
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true); // true while restoring session
+  const [isSigningIn, setIsSigningIn] = useState(false); // true while Google sign-in request is in flight
 
   // ── Restore session from stored JWT on mount ─────────────────────
   useEffect(() => {
@@ -57,11 +58,19 @@ export function AuthProvider({ children }) {
       return;
     }
 
+    setIsSigningIn(true);
+
     try {
-      const response = await api.post('/api/auth/google/', {
-        token,
-        token_type: 'id_token',
-      });
+      const response = await api.post(
+        '/api/auth/google/',
+        {
+          token,
+          token_type: 'id_token',
+        },
+        {
+          timeout: 45000, // 45s covers a Render cold start without hanging for 120s
+        }
+      );
       localStorage.setItem('token', response.data.access);
       setUser({
         ...response.data.user,
@@ -72,11 +81,15 @@ export function AuthProvider({ children }) {
       const backendError = error.response?.data;
       const message = error.code === 'ERR_NETWORK'
         ? 'Backend could not be reached. Make sure the Django API is running or deployed, then try Google sign-in again.'
+        : error.code === 'ECONNABORTED'
+        ? 'The server took too long to respond (it may be waking up). Please try again in a moment.'
         : [
             backendError?.error || 'Google sign-in failed. Please try again.',
             backendError?.detail ? `Details: ${backendError.detail}` : '',
           ].filter(Boolean).join('\n\n');
       alert(message);
+    } finally {
+      setIsSigningIn(false);
     }
   }, []);
 
@@ -89,6 +102,7 @@ export function AuthProvider({ children }) {
     user,
     setUser,
     loading,
+    isSigningIn,
     isAuthenticated: !!user,
     handleGoogleLogin,
     logout,
