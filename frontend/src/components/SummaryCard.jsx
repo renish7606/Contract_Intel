@@ -168,92 +168,169 @@ export default function SummaryCard({ data }) {
     const doc = new jsPDF({ unit: 'pt', format: 'a4' });
     const pageWidth = doc.internal.pageSize.getWidth();
     const pageHeight = doc.internal.pageSize.getHeight();
-    const margin = 40;
+    const margin = 42;
     const contentWidth = pageWidth - margin * 2;
-    let y = margin;
+    const navy = [30, 58, 138];
+    const muted = [100, 116, 139];
+    const body = [31, 41, 55];
+    const riskPalette = riskLabel === 'HIGH'
+      ? { fill: [254, 226, 226], text: [185, 28, 28] }
+      : riskLabel === 'MEDIUM'
+        ? { fill: [254, 243, 199], text: [161, 98, 7] }
+        : { fill: [220, 252, 231], text: [21, 128, 61] };
+    let y = 0;
+
+    const startPage = (isFirstPage = false) => {
+      doc.setFillColor(...navy);
+      doc.rect(0, 0, pageWidth, isFirstPage ? 78 : 44, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(isFirstPage ? 19 : 12);
+      doc.text(isFirstPage ? 'ContractIntel' : 'ContractIntel  |  Contract Analysis Report', margin, isFirstPage ? 37 : 28);
+      if (isFirstPage) {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(9.5);
+        doc.text('Plain-English contract review and negotiation guide', margin, 56);
+      }
+      doc.setTextColor(...body);
+      y = isFirstPage ? 108 : 70;
+    };
 
     const ensureSpace = (needed = 40) => {
       if (y + needed > pageHeight - margin) {
         doc.addPage();
-        y = margin;
+        startPage();
       }
     };
 
-    const addWrapped = (text, fontSize = 11, lineGap = 15) => {
+    const addWrapped = (text, x, width, fontSize = 10, lineGap = 14, color = body) => {
+      doc.setTextColor(...color);
+      doc.setFont('helvetica', 'normal');
       doc.setFontSize(fontSize);
-      const lines = doc.splitTextToSize(text || '', contentWidth);
+      const lines = doc.splitTextToSize(text || 'Not specified', width);
       lines.forEach((line) => {
         ensureSpace(lineGap);
-        doc.text(line, margin, y);
+        doc.text(line, x, y);
         y += lineGap;
       });
     };
 
-    doc.setFillColor(28, 52, 146);
-    doc.rect(0, 0, pageWidth, 90, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(20);
-    doc.text('ContractIntel', margin, 48);
-    doc.setFontSize(11);
-    doc.text('AI-Powered Contract Analysis Report', margin, 68);
-    doc.setTextColor(0, 0, 0);
-    y = 120;
+    const sectionTitle = (label) => {
+      ensureSpace(32);
+      doc.setFillColor(239, 246, 255);
+      doc.roundedRect(margin, y - 16, contentWidth, 26, 5, 5, 'F');
+      doc.setTextColor(...navy);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.text(label.toUpperCase(), margin + 12, y + 1);
+      y += 25;
+    };
 
+    startPage(true);
+    doc.setTextColor(...body);
+    doc.setFont('helvetica', 'bold');
     doc.setFontSize(14);
-    doc.text(`Document: ${title || 'Uploaded Contract'}`, margin, y);
-    y += 18;
-    doc.setFontSize(10);
-    doc.setTextColor(90);
-    doc.text(`Generated: ${new Date().toLocaleString()}`, margin, y);
-    doc.text(`Risk: ${riskLabel} (${overall_risk_score || 0}/100)`, margin + 250, y);
-    doc.setTextColor(0);
-    y += 30;
+    doc.text(title || 'Uploaded Contract', margin, y);
+    y += 17;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(...muted);
+    doc.text(`Generated ${new Date().toLocaleString()}`, margin, y);
+    doc.setFillColor(...riskPalette.fill);
+    doc.roundedRect(pageWidth - margin - 120, y - 12, 120, 20, 10, 10, 'F');
+    doc.setTextColor(...riskPalette.text);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.text(`${riskLabel} RISK  ${overall_risk_score || 0}/100`, pageWidth - margin - 108, y + 1);
+    y += 27;
 
     if (contractSummary.plain_summary) {
-      doc.setFontSize(13);
-      doc.text('What This Contract Says', margin, y);
-      y += 18;
-      addWrapped(contractSummary.plain_summary, 10, 14);
-      y += 10;
+      sectionTitle('What this contract says');
+      addWrapped(contractSummary.plain_summary, margin + 4, contentWidth - 8, 10.5, 15);
+      y += 8;
     }
 
-    ensureSpace(30);
-    doc.setFontSize(13);
-    doc.text('Key Facts', margin, y);
-    y += 18;
-    factItems.forEach((fact) => {
-      addWrapped(`${fact.label}: ${fact.value}`, 10, 13);
-    });
-    y += 8;
+    sectionTitle('Key facts');
+    for (let index = 0; index < factItems.length; index += 2) {
+      const row = factItems.slice(index, index + 2);
+      const cardWidth = (contentWidth - 10) / 2;
+      const values = row.map((fact) => doc.splitTextToSize(fact.value || 'Not specified', cardWidth - 20));
+      const cardHeight = Math.max(...values.map((lines) => 30 + lines.length * 12), 52);
+      ensureSpace(cardHeight + 8);
+      row.forEach((fact, itemIndex) => {
+        const x = margin + itemIndex * (cardWidth + 10);
+        doc.setFillColor(248, 250, 252);
+        doc.roundedRect(x, y - 12, cardWidth, cardHeight, 6, 6, 'F');
+        doc.setTextColor(...muted);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(8.5);
+        doc.text(fact.label.toUpperCase(), x + 10, y + 2);
+        doc.setTextColor(...body);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(9.5);
+        values[itemIndex].forEach((line, lineIndex) => doc.text(line, x + 10, y + 19 + lineIndex * 12));
+      });
+      y += cardHeight + 8;
+    }
 
     if (criticalAndMedium.length > 0) {
-      ensureSpace(30);
-      doc.setFontSize(13);
-      doc.text(`Critical Clauses (${criticalAndMedium.length})`, margin, y);
-      y += 18;
+      sectionTitle(`Critical clauses to review (${criticalAndMedium.length})`);
       criticalAndMedium.forEach((clause, index) => {
-        ensureSpace(50);
+        const clausePalette = clause.risk_level === 'HIGH'
+          ? { fill: [254, 226, 226], text: [185, 28, 28] }
+          : { fill: [254, 243, 199], text: [161, 98, 7] };
+        const fields = [
+          ['What it means', clause.plain_explanation],
+          ['Why it matters', clause.why_risky],
+          ['Who benefits', clause.who_benefits],
+          ['Potential impact', clause.potential_impact],
+          ['Suggested action', clause.suggested_action],
+          ['Suggested wording', clause.suggested_clause_text],
+          ['Why this helps', clause.suggestion_reasoning],
+        ].filter(([, value]) => value);
+        const fieldHeight = fields.reduce((total, [, value]) => total + 14 + doc.splitTextToSize(value, contentWidth - 36).length * 12, 0);
+        const cardHeight = 48 + fieldHeight + 12;
+        ensureSpace(Math.min(cardHeight + 10, pageHeight - 120));
+        const cardY = y - 12;
+        doc.setFillColor(255, 251, 235);
+        doc.roundedRect(margin, cardY, contentWidth, cardHeight, 7, 7, 'F');
+        doc.setFillColor(...clausePalette.fill);
+        doc.roundedRect(margin, cardY, 5, cardHeight, 3, 3, 'F');
         doc.setFontSize(11);
-        doc.text(`${index + 1}. ${clause.name} [${clause.risk_level}]`, margin, y);
-        y += 14;
-        addWrapped(`Clause risk score: ${clause.risk_score}/100${clause.confidence ? ` (${clause.confidence} confidence)` : ''}`, 9.5, 13);
-        addWrapped(clause.plain_explanation, 10, 13);
-        if (clause.detected_text) addWrapped(`Supporting text: ${clause.detected_text}`, 9.5, 13);
-        if (clause.why_risky) addWrapped(`Why risky: ${clause.why_risky}`, 9.5, 13);
-        if (clause.who_benefits) addWrapped(`Who benefits: ${clause.who_benefits}`, 9.5, 13);
-        if (clause.potential_impact) addWrapped(`Potential impact: ${clause.potential_impact}`, 9.5, 13);
-        if (clause.suggested_action) addWrapped(`Suggested action: ${clause.suggested_action}`, 9.5, 13);
-        if (clause.suggested_clause_text) addWrapped(`Suggested alternative wording: ${clause.suggested_clause_text}`, 9.5, 13);
-        if (clause.suggestion_reasoning) addWrapped(`Why this helps: ${clause.suggestion_reasoning}`, 9.5, 13);
-        y += 6;
+        doc.setTextColor(...body);
+        doc.setFont('helvetica', 'bold');
+        doc.text(`${index + 1}. ${clause.name}`, margin + 15, y + 2);
+        doc.setTextColor(...clausePalette.text);
+        doc.setFontSize(8.5);
+        doc.text(`${clause.risk_level}  |  ${clause.risk_score}/100  |  ${clause.confidence || 'MEDIUM'} CONFIDENCE`, margin + 15, y + 17);
+        y += 34;
+        fields.forEach(([label, value]) => {
+          doc.setTextColor(...navy);
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(8.5);
+          doc.text(label.toUpperCase(), margin + 15, y);
+          y += 12;
+          addWrapped(value, margin + 15, contentWidth - 30, 9.5, 12, body);
+          y += 2;
+        });
+        y = cardY + cardHeight + 12;
       });
     }
 
-    ensureSpace(30);
-    doc.setFontSize(13);
-    doc.text('Plain-English Verdict', margin, y);
-    y += 18;
-    addWrapped(verdict, 10, 13);
+    sectionTitle('Plain-English verdict');
+    addWrapped(verdict, margin + 4, contentWidth - 8, 10.5, 15);
+
+    const totalPages = doc.getNumberOfPages();
+    for (let page = 1; page <= totalPages; page += 1) {
+      doc.setPage(page);
+      doc.setDrawColor(226, 232, 240);
+      doc.line(margin, pageHeight - 28, pageWidth - margin, pageHeight - 28);
+      doc.setTextColor(...muted);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.text('AI-generated for informational purposes — not legal advice.', margin, pageHeight - 16);
+      doc.text(`Page ${page} of ${totalPages}`, pageWidth - margin - 46, pageHeight - 16);
+    }
 
     doc.save(`ContractIntel_Report_${(title || 'contract').replace(/[^a-zA-Z0-9]/g, '_')}.pdf`);
   };
