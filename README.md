@@ -52,6 +52,25 @@ ContractIntel transforms dense, complex legal agreements into structured, human-
 
 ---
 
+## Latest Analysis Features
+
+The analysis experience now goes beyond a single contract-level badge:
+
+| Feature | Detail |
+|---|---|
+| **Explainable clause risk scoring** | Every critical clause receives a 0–100 risk score, confidence level, specific risk explanation, beneficiary, and practical impact. The overall score is a confidence-weighted aggregate of those clause scores. |
+| **Negotiation suggestions** | HIGH and MEDIUM-risk clauses include a concrete action to request, fairer sample contract wording, and an explanation of why the change helps. Suggested wording can be copied directly from the result page. |
+| **Version comparison** | Upload an original and revised contract to align clauses by local classifier category, highlight word-level additions/removals, and identify whether each change increases, decreases, or has a neutral risk impact. |
+| **Improved PDF report** | The downloadable report uses key-fact cards and structured, color-coded clause sections so risk explanations, impacts, and negotiation guidance are easy to scan. |
+
+All AI-generated scores and suggestions are informational and are not a substitute for advice from a qualified legal professional.
+
+### Version comparison API
+
+`POST /api/compare/` requires authentication and accepts multipart form data with `file_v1` (original) and `file_v2` (revised). It returns category-aligned clause changes, safe word-level diff segments, and one batched AI risk-impact explanation for the changed clauses.
+
+---
+
 ## Screenshots
 
 ### Landing Page — Hero
@@ -74,12 +93,13 @@ ContractIntel transforms dense, complex legal agreements into structured, human-
 
 <br/>
 
-### Dashboard — Upload & Analysis History
-<img src="docs/screenshots/Dashboard.png" alt="Dashboard" width="100%"/>
+### Dashboard — Upload & Analysis History & Comparision Vision Board
+
+<img src="docs/screenshots/ComparisonUpload.png" alt="Dashboard comparison mode with original and revised contract uploads" width="100%"/>
 
 <br/>
 
-### Analysis Result — Summary Card
+### Analysis Result — Summary Card 
 <img src="docs/screenshots/Analysis.png" alt="Summary Card Top" width="100%"/>
 <img src="docs/screenshots/Analysis2.png" alt="Summary Card Bottom" width="100%"/>
 
@@ -87,6 +107,20 @@ ContractIntel transforms dense, complex legal agreements into structured, human-
 
 ### Downloadable PDF Report
 <img src="docs/screenshots/PdfReport.png" alt="PDF Report" width="100%"/>
+
+
+### Explainable Clause-Level Risk Scoring
+<img src="docs/screenshots/ExplainableRiskScoring.png" alt="Contract summary with risk breakdown chart" width="100%"/>
+
+<br/>
+
+### Negotiation Suggestions
+<img src="docs/screenshots/NegotiationSuggestions.png" alt="Critical clauses with suggested actions and alternative wording" width="100%"/>
+
+<br/>
+
+### Version Comparison Results
+<img src="docs/screenshots/VersionComparison.png" alt="Word-level contract version comparison with risk impact" width="100%"/>
 
 ---
 
