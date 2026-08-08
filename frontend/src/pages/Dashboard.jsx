@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Sparkles, FileText, ArrowRight, Clock, AlertTriangle, CheckCircle, Shield } from 'lucide-react';
+import { Sparkles, FileText, ArrowRight, Clock } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.jsx';
 import UploadPanel from '../components/UploadPanel.jsx';
 import ErrorBoundary from '../components/ErrorBoundary.jsx';
@@ -21,6 +21,9 @@ export default function Dashboard() {
   const [uploading, setUploading] = useState(false);
   const [loadingStep, setLoadingStep] = useState('');
   const [loadingProgress, setLoadingProgress] = useState(0);
+  const [mode, setMode] = useState('single');
+  const [versionOneFile, setVersionOneFile] = useState(null);
+  const [versionTwoFile, setVersionTwoFile] = useState(null);
 
   // Redirect if not authenticated
   useEffect(() => {
@@ -83,6 +86,32 @@ export default function Dashboard() {
     }
   }, [navigate]);
 
+  const handleComparison = useCallback(async () => {
+    if (!versionOneFile || !versionTwoFile) return;
+    setUploading(true);
+    setLoadingStep('Reading, redacting, and aligning clauses...');
+    setLoadingProgress(40);
+    const formData = new FormData();
+    formData.append('file_v1', versionOneFile);
+    formData.append('file_v2', versionTwoFile);
+    try {
+      setLoadingStep('Assessing the impact of all changes...');
+      setLoadingProgress(70);
+      const response = await api.post('/api/compare/', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      setLoadingProgress(95);
+      navigate('/result', { state: { comparisonData: response.data } });
+    } catch (err) {
+      alert(err.response?.data?.error || 'Comparison failed. Please try again.');
+      console.error(err);
+    } finally {
+      setUploading(false);
+      setLoadingStep('');
+      setLoadingProgress(0);
+    }
+  }, [navigate, versionOneFile, versionTwoFile]);
+
   const getRiskLabel = (doc) => {
     if (doc.risk_score) return doc.risk_score;
     const score = doc.overall_risk_score || 0;
@@ -131,12 +160,31 @@ export default function Dashboard() {
               <h2 className="text-sm font-bold text-gray-900">New Analysis</h2>
             </div>
             <ErrorBoundary fallbackMessage="Upload panel encountered an error.">
-              <UploadPanel
-                onUploadComplete={handleUpload}
-                loading={uploading}
-                loadingStep={loadingStep}
-                loadingProgress={loadingProgress}
-              />
+              <div className="space-y-4">
+                <div className="flex gap-2 rounded-xl bg-gray-100 p-1">
+                  <button onClick={() => setMode('single')} className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${mode === 'single' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                    Analyse Contract
+                  </button>
+                  <button onClick={() => setMode('compare')} className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${mode === 'compare' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                    Compare Versions
+                  </button>
+                </div>
+                {mode === 'single' ? (
+                  <UploadPanel onUploadComplete={handleUpload} loading={uploading} loadingStep={loadingStep} loadingProgress={loadingProgress} />
+                ) : (
+                  <div className="space-y-3">
+                    <UploadPanel label="Version 1 — Original" selectedFileName={versionOneFile?.name} onUploadComplete={setVersionOneFile} loading={uploading} loadingStep={loadingStep} loadingProgress={loadingProgress} />
+                    <UploadPanel label="Version 2 — Revised" selectedFileName={versionTwoFile?.name} onUploadComplete={setVersionTwoFile} loading={uploading} loadingStep={loadingStep} loadingProgress={loadingProgress} />
+                    <button
+                      onClick={handleComparison}
+                      disabled={!versionOneFile || !versionTwoFile || uploading}
+                      className="w-full rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-300"
+                    >
+                      Compare Contract Versions
+                    </button>
+                  </div>
+                )}
+              </div>
             </ErrorBoundary>
           </div>
 

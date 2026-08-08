@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import difflib
 import joblib
 import logging
 import uuid
@@ -67,6 +68,18 @@ stating what to ask for), suggested_clause_text (one or two sentences of realist
 contract language), and suggestion_reasoning (one sentence explaining why the change addresses
 the risk). Do not provide these fields for LOW-risk or standard clauses. These are negotiation
 starting points, not guaranteed legally sound replacements.
+"""
+
+BATCH_CHANGE_EXPLANATION_PROMPT = """
+You are a legal assistant helping the person receiving a contract. For each clause change
+below, explain in one sentence the practical impact of the change and whether it makes the
+contract MORE_RISKY, LESS_RISKY, or NEUTRAL for that person.
+
+Return ONLY a valid JSON array in the same order as the input:
+[{"category":"input category","impact_direction":"MORE_RISKY or LESS_RISKY or NEUTRAL","impact_score":0,"explanation":"one sentence"}]
+
+CHANGES:
+{changes_list}
 """
 
 SUMMARY_PROMPT = """
@@ -224,6 +237,80 @@ def _extract_json_object(raw: str) -> dict:
     if start >= 0 and end > start:
         cleaned = cleaned[start : end + 1]
     return json.loads(cleaned)
+
+
+def _extract_json_array(raw: str) -> list:
+    cleaned = (raw or "").strip()
+    if cleaned.startswith("```"):
+        parts = cleaned.split("```")
+        cleaned = parts[1] if len(parts) > 1 else cleaned
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:]
+    start, end = cleaned.find("["), cleaned.rfind("]")
+    if start < 0 or end <= start:
+        raise ValueError("Gemini did not return a JSON array.")
+    parsed = json.loads(cleaned[start : end + 1])
+    if not isinstance(parsed, list):
+        raise ValueError("Gemini response was not a JSON array.")
+    return parsed
+
+
+def classify_contract_clauses(contract_text: str) -> list:
+    """Classify a document with the existing local model for comparison alignment."""
+    clauses = []
+    for paragraph in ContractFileParser.split_into_clauses(contract_text):
+        category = "General/Unclassified"
+        confidence = 0.0
+        if clause_model:
+            try:
+                probabilities = clause_model.predict_proba([paragraph])[0]
+                confidence = float(max(probabilities))
+                if confidence >= 0.60:
+                    category = clause_model.classes_[list(probabilities).index(max(probabilities))]
+            except Exception:
+                try:
+                    category = clause_model.predict([paragraph])[0]
+                    confidence = 0.60
+                except Exception:
+                    pass
+        clauses.append({"category": category, "text": paragraph, "confidence": confidence})
+    return clauses
+
+
+def align_clauses(v1_clauses: list, v2_clauses: list) -> list:
+    """Align clauses by classifier category rather than their source position."""
+    v1_by_category = {clause["category"]: clause for clause in v1_clauses}
+    v2_by_category = {clause["category"]: clause for clause in v2_clauses}
+    aligned = []
+    for category in sorted(set(v1_by_category) | set(v2_by_category)):
+        v1_clause, v2_clause = v1_by_category.get(category), v2_by_category.get(category)
+        if v1_clause and v2_clause:
+            status_value = "unchanged" if v1_clause["text"] == v2_clause["text"] else "modified"
+        elif v1_clause:
+            status_value = "removed"
+        else:
+            status_value = "added"
+        aligned.append({
+            "category": category,
+            "v1_text": v1_clause["text"] if v1_clause else None,
+            "v2_text": v2_clause["text"] if v2_clause else None,
+            "status": status_value,
+        })
+    return aligned
+
+
+def word_diff(text_v1: str, text_v2: str) -> list:
+    """Return display-safe word-level diff segments; no HTML is generated server-side."""
+    old_words, new_words = (text_v1 or "").split(), (text_v2 or "").split()
+    result = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, old_words, new_words).get_opcodes():
+        if tag == "equal":
+            result.append({"type": "same", "text": " ".join(old_words[i1:i2])})
+        elif tag in {"delete", "replace"}:
+            result.append({"type": "removed", "text": " ".join(old_words[i1:i2])})
+        if tag in {"insert", "replace"}:
+            result.append({"type": "added", "text": " ".join(new_words[j1:j2])})
+    return [part for part in result if part["text"]]
 
 
 def _plain_clause_explanation(clause: dict) -> str:
@@ -552,6 +639,112 @@ class CurrentUserView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class ContractComparisonView(APIView):
+    """Compare two scrubbed contract versions with one batched Gemini explanation call."""
+    permission_classes = [IsAuthenticated]
+
+    @staticmethod
+    def _explain_changes(changes: list) -> list:
+        changed = [change for change in changes if change["status"] != "unchanged"]
+        if not changed:
+            return []
+
+        fallback = [
+            {
+                "category": change["category"],
+                "impact_direction": "NEUTRAL",
+                "impact_score": 0,
+                "explanation": "This clause changed; review the highlighted wording to assess its practical effect.",
+            }
+            for change in changed
+        ]
+        if not ai_client:
+            return fallback
+
+        prompt_changes = []
+        for change in changed[:25]:
+            prompt_changes.append(
+                f"Category: {change['category']}\nStatus: {change['status']}\n"
+                f"Original: {(change['v1_text'] or 'Not present')[:700]}\n"
+                f"Revised: {(change['v2_text'] or 'Not present')[:700]}"
+            )
+        prompt = BATCH_CHANGE_EXPLANATION_PROMPT.replace(
+            "{changes_list}", "\n\n---\n\n".join(prompt_changes)
+        )
+        executor = ThreadPoolExecutor(max_workers=1)
+        try:
+            future = executor.submit(ContractComparisonView._generate_change_explanations, prompt)
+            explanations = future.result(timeout=12)
+            if len(explanations) != len(prompt_changes):
+                return fallback
+            for index, explanation in enumerate(explanations):
+                direction = str(explanation.get("impact_direction") or "NEUTRAL").upper()
+                try:
+                    score = max(0, min(100, int(explanation.get("impact_score", 0))))
+                except (TypeError, ValueError):
+                    score = 0
+                fallback[index].update({
+                    "impact_direction": direction if direction in {"MORE_RISKY", "LESS_RISKY", "NEUTRAL"} else "NEUTRAL",
+                    "impact_score": score,
+                    "explanation": explanation.get("explanation") or fallback[index]["explanation"],
+                })
+        except Exception as exc:
+            print(f"Comparison explanation failed; using local explanation: {exc}")
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+        return fallback
+
+    @staticmethod
+    def _generate_change_explanations(prompt: str) -> list:
+        last_error = None
+        for candidate in GEMINI_MODEL_CANDIDATES:
+            model_name = candidate if candidate.startswith("models/") else f"models/{candidate}"
+            try:
+                response = ai_client.models.generate_content(model=model_name, contents=prompt)
+                return _extract_json_array(response.text or "")
+            except Exception as exc:
+                last_error = exc
+                print(f"Gemini comparison attempt failed ({model_name}): {exc}")
+        raise RuntimeError(f"All Gemini comparison candidates failed: {last_error}")
+
+    def post(self, request):
+        file_v1, file_v2 = request.FILES.get("file_v1"), request.FILES.get("file_v2")
+        if not file_v1 or not file_v2:
+            return Response(
+                {"error": "Upload both the original and revised contract files."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            text_v1 = scrubber.scrub_text(
+                ContractFileParser.extract_text(file_v1, file_v1.name)
+            )["scrubbed_text"]
+            text_v2 = scrubber.scrub_text(
+                ContractFileParser.extract_text(file_v2, file_v2.name)
+            )["scrubbed_text"]
+            aligned = align_clauses(
+                classify_contract_clauses(text_v1), classify_contract_clauses(text_v2)
+            )
+            changes = [change for change in aligned if change["status"] != "unchanged"]
+            explanations = self._explain_changes(changes)
+            for change, explanation in zip(changes, explanations):
+                change.update(explanation)
+                if change["status"] == "modified":
+                    change["diff"] = word_diff(change["v1_text"], change["v2_text"])
+
+            more_risky = sum(1 for change in changes if change.get("impact_direction") == "MORE_RISKY")
+            summary = (
+                "No clause changes detected between these versions."
+                if not changes
+                else f"{len(changes)} clause change{'s' if len(changes) != 1 else ''} detected; {more_risky} increase risk."
+            )
+            return Response({"id": str(uuid.uuid4()), "overall_change_summary": summary, "changes": changes})
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception:
+            logger.exception("Contract comparison failed")
+            return Response({"error": "Unable to compare these contracts. Please try again."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class DocumentListCreateView(generics.ListCreateAPIView):

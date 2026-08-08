@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { ChevronDown, ChevronUp, Eye, FileText } from 'lucide-react';
 import RedactionPanel from '../components/RedactionPanel.jsx';
 import SummaryCard from '../components/SummaryCard.jsx';
+import ComparisonResult from '../components/ComparisonResult.jsx';
 import ErrorBoundary from '../components/ErrorBoundary.jsx';
 
 /**
@@ -87,16 +88,27 @@ export default function AnalysisResult() {
   const location = useLocation();
   const navigate = useNavigate();
   const analysisData = location.state?.analysisData;
+  const comparisonData = location.state?.comparisonData;
   const [activeClauseId, setActiveClauseId] = useState(null);
   const [showDetailView, setShowDetailView] = useState(false);
   const paragraphRefs = useRef([]);
 
   // If no data, redirect to dashboard
   React.useEffect(() => {
-    if (!analysisData) navigate('/dashboard', { replace: true });
-  }, [analysisData, navigate]);
+    if (!analysisData && !comparisonData) navigate('/dashboard', { replace: true });
+  }, [analysisData, comparisonData, navigate]);
 
-  if (!analysisData) return null;
+  if (!analysisData && !comparisonData) return null;
+
+  if (comparisonData) {
+    return (
+      <div className="min-h-[calc(100vh-60px)] bg-gray-50/50">
+        <div className="max-w-5xl mx-auto px-6 py-8">
+          <ComparisonResult data={comparisonData} />
+        </div>
+      </div>
+    );
+  }
 
   const clauses = analysisData.clauses || [];
 

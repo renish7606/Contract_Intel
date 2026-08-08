@@ -134,6 +134,11 @@ export default function SummaryCard({ data }) {
       text += `CRITICAL/MEDIUM CLAUSES (${criticalAndMedium.length}):\n`;
       criticalAndMedium.forEach((clause) => {
         text += `- ${clause.name} [${clause.risk_level}] - ${clause.plain_explanation}\n`;
+        if (clause.why_risky) text += `  Why risky: ${clause.why_risky}\n`;
+        if (clause.who_benefits) text += `  Who benefits: ${clause.who_benefits}\n`;
+        if (clause.potential_impact) text += `  Potential impact: ${clause.potential_impact}\n`;
+        if (clause.suggested_action) text += `  Suggested action: ${clause.suggested_action}\n`;
+        if (clause.suggested_clause_text) text += `  Alternative wording: ${clause.suggested_clause_text}\n`;
       });
       text += '\n';
     }
@@ -200,7 +205,7 @@ export default function SummaryCard({ data }) {
     doc.setFontSize(10);
     doc.setTextColor(90);
     doc.text(`Generated: ${new Date().toLocaleString()}`, margin, y);
-    doc.text(`Risk Level: ${riskLabel}`, margin + 250, y);
+    doc.text(`Risk: ${riskLabel} (${overall_risk_score || 0}/100)`, margin + 250, y);
     doc.setTextColor(0);
     y += 30;
 
@@ -208,7 +213,7 @@ export default function SummaryCard({ data }) {
       doc.setFontSize(13);
       doc.text('What This Contract Says', margin, y);
       y += 18;
-      addWrapped(contractSummary.plain_summary, 10.5, 14);
+      addWrapped(contractSummary.plain_summary, 10, 14);
       y += 10;
     }
 
@@ -231,7 +236,15 @@ export default function SummaryCard({ data }) {
         doc.setFontSize(11);
         doc.text(`${index + 1}. ${clause.name} [${clause.risk_level}]`, margin, y);
         y += 14;
+        addWrapped(`Clause risk score: ${clause.risk_score}/100${clause.confidence ? ` (${clause.confidence} confidence)` : ''}`, 9.5, 13);
         addWrapped(clause.plain_explanation, 10, 13);
+        if (clause.detected_text) addWrapped(`Supporting text: ${clause.detected_text}`, 9.5, 13);
+        if (clause.why_risky) addWrapped(`Why risky: ${clause.why_risky}`, 9.5, 13);
+        if (clause.who_benefits) addWrapped(`Who benefits: ${clause.who_benefits}`, 9.5, 13);
+        if (clause.potential_impact) addWrapped(`Potential impact: ${clause.potential_impact}`, 9.5, 13);
+        if (clause.suggested_action) addWrapped(`Suggested action: ${clause.suggested_action}`, 9.5, 13);
+        if (clause.suggested_clause_text) addWrapped(`Suggested alternative wording: ${clause.suggested_clause_text}`, 9.5, 13);
+        if (clause.suggestion_reasoning) addWrapped(`Why this helps: ${clause.suggestion_reasoning}`, 9.5, 13);
         y += 6;
       });
     }
@@ -269,10 +282,10 @@ export default function SummaryCard({ data }) {
       <div className="px-6 py-5 space-y-6">
         {contractSummary.plain_summary && (
           <div className="bg-white rounded-xl p-6 border border-gray-100 shadow-sm">
-            <h2 className="text-base font-semibold text-gray-900 mb-3">
+            <h2 className="text-sm font-semibold text-gray-900 mb-3">
               What This Contract Says
             </h2>
-            <p className="max-w-5xl text-gray-800 text-base sm:text-[17px] leading-8 font-normal">
+            <p className="max-w-5xl text-sm text-gray-700 leading-7 font-normal">
               {contractSummary.plain_summary}
             </p>
           </div>

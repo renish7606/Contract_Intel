@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { Upload, FileText, AlertCircle } from 'lucide-react';
 
@@ -9,7 +9,7 @@ const ACCEPTED_TYPES = {
 };
 const MAX_SIZE = 10 * 1024 * 1024; // 10MB
 
-export default function UploadPanel({ onUploadComplete, loading, loadingStep, loadingProgress }) {
+export default function UploadPanel({ onUploadComplete, loading, loadingStep, loadingProgress, label, selectedFileName }) {
   const [error, setError] = useState('');
 
   const onDrop = useCallback((acceptedFiles, rejectedFiles) => {
@@ -80,8 +80,9 @@ export default function UploadPanel({ onUploadComplete, loading, loadingStep, lo
                 <Upload className="w-8 h-8" />
               )}
             </div>
+            {label && <span className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{label}</span>}
             <span className="text-sm font-semibold text-gray-700 mb-1">
-              {isDragActive ? 'Drop your contract here' : 'Drag & drop or click to browse'}
+              {isDragActive ? 'Drop your contract here' : selectedFileName || 'Drag & drop or click to browse'}
             </span>
             <span className="text-xs text-gray-400">PDF, DOCX, or TXT — Max 10MB</span>
           </>
