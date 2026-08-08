@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -37,13 +37,24 @@ const EMPTY_FACTS = {
 };
 
 function normalizeClause(clause) {
+  const riskLevel = (clause.risk_level || 'MEDIUM').toUpperCase();
+  const fallbackScore = riskLevel === 'HIGH' ? 75 : riskLevel === 'MEDIUM' ? 50 : 15;
   return {
     name: clause.name || clause.category || 'Important Clause',
     plain_explanation:
       clause.plain_explanation ||
       clause.simplified_text ||
       'This means you should review this clause before signing.',
-    risk_level: (clause.risk_level || 'MEDIUM').toUpperCase(),
+    risk_level: riskLevel,
+    risk_score: Math.max(0, Math.min(100, Number(clause.risk_score) || fallbackScore)),
+    detected_text: clause.detected_text || '',
+    why_risky: clause.why_risky || clause.risk_explanation || '',
+    who_benefits: clause.who_benefits || '',
+    potential_impact: clause.potential_impact || '',
+    confidence: clause.confidence || '',
+    suggested_action: clause.suggested_action || '',
+    suggested_clause_text: clause.suggested_clause_text || '',
+    suggestion_reasoning: clause.suggestion_reasoning || '',
   };
 }
 
@@ -66,7 +77,7 @@ export default function SummaryCard({ data }) {
 
   const riskLabel =
     risk_score ||
-    (overall_risk_score >= 60 ? 'HIGH' : overall_risk_score >= 30 ? 'MEDIUM' : 'LOW');
+    (overall_risk_score >= 65 ? 'HIGH' : overall_risk_score >= 35 ? 'MEDIUM' : 'LOW');
   const riskStyle = RISK_STYLES[riskLabel] || RISK_STYLES.LOW;
 
   const summaryFacts = summary?.key_facts || {};
@@ -137,6 +148,14 @@ export default function SummaryCard({ data }) {
       setTimeout(() => setCopySuccess(false), 2000);
     } catch {
       alert('Failed to copy to clipboard.');
+    }
+  };
+
+  const handleSuggestedClauseCopy = async (suggestedClause) => {
+    try {
+      await navigator.clipboard.writeText(suggestedClause);
+    } catch {
+      alert('Failed to copy the suggested clause.');
     }
   };
 
@@ -259,6 +278,10 @@ export default function SummaryCard({ data }) {
           </div>
         )}
 
+        <p className="text-xs text-gray-400 -mt-3">
+          ⚠️ Risk scores and negotiation suggestions are AI-generated for informational purposes and are not a substitute for advice from a qualified legal professional.
+        </p>
+
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {factItems.map((fact) => (
             <div
@@ -275,6 +298,28 @@ export default function SummaryCard({ data }) {
 
         {criticalAndMedium.length > 0 ? (
           <div>
+            <div className="bg-white rounded-xl p-6 border border-gray-100 shadow-sm mb-4">
+              <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">
+                Risk Breakdown
+              </h3>
+              {criticalAndMedium.map((clause, index) => (
+                <div key={`${clause.name}-risk-${index}`} className="flex items-center gap-3 mb-3 last:mb-0">
+                  <span className="text-sm text-gray-700 w-40 truncate">{clause.name}</span>
+                  <div className="flex-1 bg-gray-100 rounded-full h-2">
+                    <div
+                      className={`h-2 rounded-full ${
+                        clause.risk_score >= 65 ? 'bg-red-500' :
+                        clause.risk_score >= 35 ? 'bg-yellow-500' : 'bg-green-500'
+                      }`}
+                      style={{ width: `${clause.risk_score}%` }}
+                    />
+                  </div>
+                  <span className="text-sm font-medium text-gray-600 w-12 text-right">
+                    {clause.risk_score}/100
+                  </span>
+                </div>
+              ))}
+            </div>
             <h4 className="flex items-center gap-2 text-sm font-bold text-gray-900 mb-3">
               <AlertTriangle className="w-4 h-4 text-amber-500" />
               Critical Clauses to Review ({criticalAndMedium.length} shown)
@@ -306,6 +351,34 @@ export default function SummaryCard({ data }) {
                   <p className="text-xs text-gray-600 leading-relaxed">
                     {clause.plain_explanation}
                   </p>
+                  <div className="mt-3 pt-3 border-t border-gray-100 space-y-2 text-xs text-gray-600">
+                    {clause.why_risky && <p><span className="font-semibold text-gray-700">Why it&apos;s risky: </span>{clause.why_risky}</p>}
+                    {clause.who_benefits && <p><span className="font-semibold text-gray-700">Who benefits: </span>{clause.who_benefits}</p>}
+                    {clause.potential_impact && <p><span className="font-semibold text-gray-700">Potential impact: </span>{clause.potential_impact}</p>}
+                  </div>
+                  {clause.suggested_action && (
+                    <div className="mt-3 pt-3 border-t border-gray-100">
+                      <p className="text-xs font-semibold text-blue-600 uppercase tracking-wide mb-1">
+                        💡 Suggested Action
+                      </p>
+                      <p className="text-sm text-gray-700">{clause.suggested_action}</p>
+                      {clause.suggested_clause_text && (
+                        <div className="mt-2 bg-blue-50 rounded-lg p-3">
+                          <p className="text-xs text-gray-500 mb-1">Suggested Alternative Wording</p>
+                          <p className="text-sm text-gray-800 italic">&ldquo;{clause.suggested_clause_text}&rdquo;</p>
+                          <button
+                            onClick={() => handleSuggestedClauseCopy(clause.suggested_clause_text)}
+                            className="mt-2 text-xs text-blue-600 hover:text-blue-700 font-medium"
+                          >
+                            Copy Suggested Clause
+                          </button>
+                        </div>
+                      )}
+                      {clause.suggestion_reasoning && (
+                        <p className="mt-2 text-xs text-gray-500"><span className="font-semibold">Why this helps: </span>{clause.suggestion_reasoning}</p>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

@@ -49,6 +49,26 @@ GEMINI_MODEL_CANDIDATES = list(dict.fromkeys(GEMINI_MODEL_CANDIDATES))
 MAX_BATCH_CLAUSES = 25
 MAX_CLAUSE_CHARS_FOR_AI = 350
 
+CLAUSE_SCORING_ADDITION = """
+For each clause in critical_clauses, also include risk_score (an integer from 0-100),
+detected_text (the exact clause text that drove this score, maximum 40 words),
+why_risky (one sentence describing the specific risk), who_benefits ("Service Provider",
+"Customer", or "Neither party specifically"), potential_impact (one sentence describing
+what could happen to the signer), and confidence ("HIGH", "MEDIUM", or "LOW").
+
+risk_score is your direct judgment based on financial exposure, one-sidedness, missing
+protections, and how unusual the term is versus standard contracts. Do not describe it as
+a computed formula.
+"""
+
+NEGOTIATION_ADDITION = """
+For each HIGH or MEDIUM critical clause, also include suggested_action (one short sentence
+stating what to ask for), suggested_clause_text (one or two sentences of realistic, fairer
+contract language), and suggestion_reasoning (one sentence explaining why the change addresses
+the risk). Do not provide these fields for LOW-risk or standard clauses. These are negotiation
+starting points, not guaranteed legally sound replacements.
+"""
+
 SUMMARY_PROMPT = """
 You are a legal assistant helping non-lawyers understand contracts.
 Analyse the following contract text and return ONLY a JSON object - no preamble, no explanation, no markdown.
@@ -76,7 +96,16 @@ Return this exact JSON structure:
     {
       "name": "clause name in plain English",
       "plain_explanation": "1-2 sentences explaining what this clause means for the person signing. Start with 'This means...' or 'This clause says...'",
-      "risk_level": "HIGH or MEDIUM"
+      "risk_level": "HIGH or MEDIUM",
+      "risk_score": "integer 0-100",
+      "detected_text": "exact supporting clause text, maximum 40 words",
+      "why_risky": "one sentence",
+      "who_benefits": "Service Provider, Customer, or Neither party specifically",
+      "potential_impact": "one sentence",
+      "confidence": "HIGH, MEDIUM, or LOW",
+      "suggested_action": "one short sentence for HIGH or MEDIUM clauses",
+      "suggested_clause_text": "fairer replacement contract language for HIGH or MEDIUM clauses",
+      "suggestion_reasoning": "one sentence for HIGH or MEDIUM clauses"
     }
   ],
 
@@ -89,6 +118,9 @@ RULES FOR critical_clauses:
 - MEDIUM risk: payment terms, termination penalties, confidentiality obligations, dispute location.
 - DO NOT include standard boilerplate: governing law choice, notice requirements, severability, entire agreement clauses.
 - Each plain_explanation must be specific to THIS contract's actual text, not generic.
+
+{clause_scoring_addition}
+{negotiation_addition}
 
 CONTRACT TEXT (PII has been removed and replaced with [REDACTED] tokens):
 {contract_text}
@@ -154,6 +186,30 @@ def calculate_risk_score(flagged_clauses: list) -> str:
     return "LOW"
 
 
+def calculate_overall_risk(critical_clauses: list) -> dict:
+    """Aggregate LLM clause judgments into a transparent overall risk result."""
+    if not critical_clauses:
+        return {"score": 10, "level": "LOW"}
+
+    confidence_weight = {"HIGH": 1.0, "MEDIUM": 0.7, "LOW": 0.4}
+    weighted_scores = []
+    weights = []
+    for clause in critical_clauses:
+        try:
+            score = max(0, min(100, int(clause.get("risk_score", 0))))
+        except (TypeError, ValueError):
+            score = 0
+        weight = confidence_weight.get(
+            str(clause.get("confidence", "MEDIUM")).upper(), 0.7
+        )
+        weighted_scores.append(score * weight)
+        weights.append(weight)
+
+    overall = sum(weighted_scores) / sum(weights) if weights else 0
+    level = "HIGH" if overall >= 65 else "MEDIUM" if overall >= 35 else "LOW"
+    return {"score": round(overall), "level": level}
+
+
 def _extract_json_object(raw: str) -> dict:
     cleaned = (raw or "").strip()
     if cleaned.startswith("```"):
@@ -183,6 +239,41 @@ def _plain_clause_explanation(clause: dict) -> str:
     if not explanation.lower().startswith(("this means", "this clause says")):
         explanation = f"This means {explanation[0].lower()}{explanation[1:]}"
     return explanation
+
+
+def _normalise_critical_clause(clause: dict) -> dict:
+    """Keep AI and local-fallback critical clauses on the same response contract."""
+    risk_level = str(clause.get("risk_level") or "MEDIUM").upper()
+    if risk_level not in {"HIGH", "MEDIUM", "LOW"}:
+        risk_level = "MEDIUM"
+    default_score = {"HIGH": 75, "MEDIUM": 50, "LOW": 15}[risk_level]
+    try:
+        risk_score = max(0, min(100, int(clause.get("risk_score", default_score))))
+    except (TypeError, ValueError):
+        risk_score = default_score
+
+    detected_text = (clause.get("detected_text") or clause.get("original_text") or "").strip()
+    detected_text = " ".join(detected_text.split()[:40])
+    normalised = {
+        "name": clause.get("name") or clause.get("category") or "Important Clause",
+        "plain_explanation": _plain_clause_explanation(clause),
+        "risk_level": risk_level,
+        "risk_score": risk_score,
+        "detected_text": detected_text,
+        "why_risky": clause.get("why_risky") or clause.get("risk_explanation") or "This term may create obligations or exposure that should be reviewed before signing.",
+        "who_benefits": clause.get("who_benefits") or "Neither party specifically",
+        "potential_impact": clause.get("potential_impact") or "You could be bound by this term if the agreement is signed.",
+        "confidence": str(clause.get("confidence") or "MEDIUM").upper(),
+    }
+    if normalised["confidence"] not in {"HIGH", "MEDIUM", "LOW"}:
+        normalised["confidence"] = "MEDIUM"
+    if risk_level in {"HIGH", "MEDIUM"}:
+        normalised.update({
+            "suggested_action": clause.get("suggested_action") or "Ask the other party to revise this term to be more balanced.",
+            "suggested_clause_text": clause.get("suggested_clause_text") or "This provision will apply on terms that are reasonable, mutual, and agreed in writing by both parties.",
+            "suggestion_reasoning": clause.get("suggestion_reasoning") or "A balanced, mutually agreed term reduces one-sided exposure.",
+        })
+    return normalised
 
 
 def local_fallback_summary(contract_text: str, clause_classifications: dict) -> dict:
@@ -498,7 +589,12 @@ class DocumentListCreateView(generics.ListCreateAPIView):
         if not ai_client:
             raise RuntimeError("Gemini client is not initialized.")
 
-        prompt = SUMMARY_PROMPT.replace("{contract_text}", (scrubbed_text or "")[:12000])
+        prompt = (
+            SUMMARY_PROMPT
+            .replace("{clause_scoring_addition}", CLAUSE_SCORING_ADDITION)
+            .replace("{negotiation_addition}", NEGOTIATION_ADDITION)
+            .replace("{contract_text}", (scrubbed_text or "")[:12000])
+        )
         last_error = None
         for candidate in GEMINI_MODEL_CANDIDATES:
             model_name = candidate if candidate.startswith("models/") else f"models/{candidate}"
@@ -562,20 +658,11 @@ class DocumentListCreateView(generics.ListCreateAPIView):
             ]
             important.sort(key=lambda c: risk_order[(c.get("risk_level") or "").upper()])
             summary["critical_clauses"] = [
-                {
-                    "name": clause.get("category") or "Important Clause",
-                    "plain_explanation": _plain_clause_explanation(clause),
-                    "risk_level": (clause.get("risk_level") or "MEDIUM").upper(),
-                }
-                for clause in important[:5]
+                _normalise_critical_clause(clause) for clause in important[:5]
             ]
         else:
             summary["critical_clauses"] = [
-                {
-                    "name": clause.get("name") or clause.get("category") or "Important Clause",
-                    "plain_explanation": _plain_clause_explanation(clause),
-                    "risk_level": (clause.get("risk_level") or "MEDIUM").upper(),
-                }
+                _normalise_critical_clause(clause)
                 for clause in summary["critical_clauses"]
                 if (clause.get("risk_level") or "").upper() in {"HIGH", "MEDIUM"}
             ][:5]
@@ -972,14 +1059,12 @@ class DocumentListCreateView(generics.ListCreateAPIView):
             else:
                 document.save(update_fields=["analysis_mode"])
 
-            # Compute the risk_score label using the GEMINI.md spec logic
-            risk_score_label = calculate_risk_score(clause_data)
-
             serializer = self.get_serializer(document)
             response_data = dict(serializer.data)
             summary_clauses = [
                 {
                     "category": clause.category,
+                    "original_text": clause.original_text,
                     "simplified_text": clause.simplified_text,
                     "risk_level": clause.risk_level,
                     "risk_explanation": clause.risk_explanation,
@@ -991,9 +1076,13 @@ class DocumentListCreateView(generics.ListCreateAPIView):
                 clauses=summary_clauses,
                 analysis_mode=analysis_mode,
             )
+            overall_risk = calculate_overall_risk(summary["critical_clauses"])
+            document.overall_risk_score = overall_risk["score"]
+            document.save(update_fields=["overall_risk_score"])
+            response_data["overall_risk_score"] = overall_risk["score"]
             response_data["summary"] = summary
             response_data["executive_summary"] = summary.get("plain_summary", "")
-            response_data["risk_score"] = risk_score_label
+            response_data["risk_score"] = overall_risk["level"]
             return Response(response_data, status=status.HTTP_201_CREATED)
 
         except Exception as err:
