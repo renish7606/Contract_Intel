@@ -6,6 +6,7 @@ import joblib
 import logging
 import uuid
 import requests
+import time
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import IntegrityError, DatabaseError
@@ -15,6 +16,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from .agent.router import run_external_context_router, should_route_to_external
 
 try:
     from google import genai
@@ -24,7 +26,7 @@ except Exception as genai_import_err:
     types = None
     print(f"Google GenAI SDK import unavailable: {genai_import_err}")
 
-from .models import ContractClause, Document
+from .models import ContractClause, Document, ExternalContextCache
 from .parser import ContractFileParser
 from .serializers import DocumentSerializer
 from .utils import PIIScrubber
@@ -49,6 +51,27 @@ else:
 GEMINI_MODEL_CANDIDATES = list(dict.fromkeys(GEMINI_MODEL_CANDIDATES))
 MAX_BATCH_CLAUSES = 25
 MAX_CLAUSE_CHARS_FOR_AI = 350
+
+MAX_EXTERNAL_LOOKUPS_PER_DOCUMENT = 5
+# Bound router evaluations as well as successful searches.  A failed or
+# negative assessment still consumes time/API quota, so it must not allow the
+# upload request to fan out across every MEDIUM/HIGH clause.
+MAX_EXTERNAL_ROUTER_ATTEMPTS_PER_DOCUMENT = 5
+EXTERNAL_CONTEXT_TIMEOUT_SECONDS = 10
+# A process-level executor avoids creating and tearing down worker pools for
+# every clause. Workers check the deadline before entering the router.
+ROUTER_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="contractintel-router")
+
+EXTERNAL_CONTEXT_CATEGORIES = {
+    "non solicitation", "non solicit of employees", "no solicit of employees",
+    "no solicitation of employees", "non compete", "cap on liability",
+    "limitation of liability", "indemnification", "governing law",
+    "ip ownership assignment", "ip assignment",
+}
+
+
+def _normalise_clause_category(category: str) -> str:
+    return " ".join((category or "").lower().replace("_", " ").replace("-", " ").split())
 
 CLAUSE_SCORING_ADDITION = """
 For each clause in critical_clauses, also include risk_score (an integer from 0-100),
@@ -102,7 +125,8 @@ Return this exact JSON structure:
     "payment": "exact payment amount and frequency if mentioned, e.g. USD 4,500 per month. Write Not specified if absent.",
     "duration": "contract length, e.g. 12 months, 2 years, indefinite",
     "termination": "how the contract can be ended, e.g. 30 days written notice by either party",
-    "dispute_resolution": "how disputes are handled and where, e.g. arbitration in Chicago, Illinois under Illinois law"
+    "dispute_resolution": "how disputes are handled and where, e.g. arbitration in Chicago, Illinois under Illinois law",
+    "governing_law": "The exact governing law, jurisdiction, or courts stated in the contract. Examples: Indian law, laws of India, courts of Ahmedabad, Gujarat. Write Not specified if absent.",
   },
 
   "critical_clauses": [
@@ -491,6 +515,81 @@ def local_fallback_summary(contract_text: str, clause_classifications: dict) -> 
         "verdict": "Review payment, termination, confidentiality, liability, and dispute terms before signing.",
         "source": "local_fallback",
     }
+
+def _run_external_router_with_timeout(
+    *,
+    clause_text: str,
+    clause_category: str,
+    risk_explanation: str,
+    governing_law: str,
+    risk_level: str,
+) -> dict:
+    """
+    Run the LangGraph external-context router with a hard timeout.
+
+    On timeout/failure, return empty legal context so the existing
+    contract analysis remains unchanged.
+    """
+
+    deadline = time.monotonic() + EXTERNAL_CONTEXT_TIMEOUT_SECONDS
+
+    def run_if_fresh():
+        if time.monotonic() >= deadline:
+            return {"needs_external": False, "reason": "Router deadline expired.",
+                    "search_query": "", "legal_context": "", "sources": []}
+        return run_external_context_router(
+            clause_text=clause_text,
+            clause_category=clause_category,
+            risk_explanation=risk_explanation,
+            governing_law=governing_law,
+            risk_level=risk_level,
+            deadline=deadline,
+        )
+
+    try:
+        future = ROUTER_EXECUTOR.submit(run_if_fresh)
+
+        try:
+            return future.result(
+                timeout=EXTERNAL_CONTEXT_TIMEOUT_SECONDS
+            )
+
+        except FuturesTimeoutError:
+            logger.warning(
+                "contractintel_external_router_timeout"
+            )
+
+            return {
+                "needs_external": False,
+                "reason": "Router timed out.",
+                "search_query": "",
+                "legal_context": "",
+                "sources": [],
+            }
+
+        except Exception as exc:
+            logger.exception(
+                "contractintel_external_router_error: %s",
+                exc,
+            )
+
+            return {
+                "needs_external": False,
+                "reason": "Router failed.",
+                "search_query": "",
+                "legal_context": "",
+                "sources": [],
+            }
+
+    except Exception as exc:
+        logger.exception("contractintel_external_router_submit_error: %s", exc)
+        return {
+            "needs_external": False,
+            "reason": "Router unavailable; using existing analysis.",
+            "search_query": "",
+            "legal_context": "",
+            "sources": [],
+        }
 
 
 class GoogleLoginView(APIView):
@@ -937,7 +1036,14 @@ class DocumentListCreateView(generics.ListCreateAPIView):
         """
         compact = []
         truncated_count = 0
-        for item in clause_data[:MAX_BATCH_CLAUSES]:
+        # Prioritise clauses that can receive external legal context. The
+        # remaining clauses still get local fallback analysis if truncated.
+        clauses_sorted = sorted(
+            clause_data,
+            key=lambda item: 0 if _normalise_clause_category(item.get("category"))
+            in EXTERNAL_CONTEXT_CATEGORIES else 1,
+        )
+        for item in clauses_sorted[:MAX_BATCH_CLAUSES]:
             text = " ".join((item.get("text") or "").split())
             if len(text) > MAX_CLAUSE_CHARS_FOR_AI:
                 text = f"{text[:MAX_CLAUSE_CHARS_FOR_AI].rstrip()}..."
@@ -1237,6 +1343,170 @@ class DocumentListCreateView(generics.ListCreateAPIView):
             if clause_instances:
                 ContractClause.objects.bulk_create(clause_instances)
 
+            # ---------------------------------------------------------------
+            # Build existing contract summary first.
+            # This gives us the already-extracted governing-law information
+            # that the external-context router will reuse.
+            # ---------------------------------------------------------------
+
+            summary_clauses = [
+                {
+                    "category": clause.category,
+                    "original_text": clause.original_text,
+                    "simplified_text": clause.simplified_text,
+                    "risk_level": clause.risk_level,
+                    "risk_explanation": clause.risk_explanation,
+                }
+                for clause in clause_instances
+            ]
+
+            summary = self._build_contract_summary(
+                scrubbed_text=scrubbed_text,
+                clauses=summary_clauses,
+                analysis_mode=analysis_mode,
+            )
+
+            # Reuse the governing law extracted by the existing summary stage.
+            key_facts = summary.get("key_facts") or {}
+
+            governing_law = str(
+                key_facts.get("governing_law") or ""
+            ).strip()
+
+            if governing_law and governing_law.lower() != "not specified":
+                document.governing_law = governing_law
+
+            # ---------------------------------------------------------------
+            # LangGraph external-context routing
+            # Only MEDIUM/HIGH clauses are eligible.
+            # Hard cap: 5 actual external searches per document.
+            # ---------------------------------------------------------------
+
+            external_lookups_used = 0
+            external_router_attempts = 0
+
+            for clause in clause_instances:
+
+                risk_level = (
+                    clause.risk_level or "LOW"
+                ).upper()
+
+                if risk_level not in {"MEDIUM", "HIGH"}:
+                    continue
+
+                if not should_route_to_external(clause.category, risk_level):
+                    continue
+
+                cache_category = " ".join((clause.category or "").lower().split())
+                cache_jurisdiction = " ".join((governing_law or "not specified").lower().split())
+                cached = ExternalContextCache.objects.filter(
+                    clause_category=cache_category,
+                    jurisdiction=cache_jurisdiction,
+                ).first()
+                if cached:
+                    clause.legal_context = cached.legal_context
+                    clause.legal_context_sources = cached.sources
+                    logger.info(
+                        "contractintel_router_cache_hit needs_external=%s legal_context=%r sources=%r",
+                        True,
+                        cached.legal_context,
+                        cached.sources,
+                        extra={
+                            "document_id": document.id,
+                            "clause_id": clause.id,
+                            "category": clause.category,
+                        },
+                    )
+                    continue
+
+                if external_router_attempts >= MAX_EXTERNAL_ROUTER_ATTEMPTS_PER_DOCUMENT:
+                    logger.info(
+                        "contractintel_external_router_cap_reached",
+                        extra={
+                            "document_id": document.id,
+                            "clause_id": clause.id,
+                            "max_router_attempts": MAX_EXTERNAL_ROUTER_ATTEMPTS_PER_DOCUMENT,
+                        },
+                    )
+                    break
+
+                external_router_attempts += 1
+
+                router_result = _run_external_router_with_timeout(
+                    clause_text=clause.original_text,
+                    clause_category=clause.category,
+                    risk_explanation=clause.risk_explanation or "",
+                    governing_law=governing_law,
+                    risk_level=risk_level,
+                )
+
+                logger.info(
+                    "contractintel_router_clause_result needs_external=%s legal_context=%r sources=%r",
+                    router_result.get("needs_external", False),
+                    router_result.get("legal_context", ""),
+                    router_result.get("sources", []),
+                    extra={
+                        "document_id": document.id,
+                        "clause_id": clause.id,
+                        "category": clause.category,
+                        "risk_level": risk_level,
+                        "needs_external": router_result.get(
+                            "needs_external",
+                            False,
+                        ),
+                        "reason": router_result.get(
+                            "reason",
+                            "",
+                        ),
+                        "legal_context": router_result.get(
+                            "legal_context",
+                            "",
+                        ),
+                        "sources": router_result.get(
+                            "sources",
+                            [],
+                        ),
+                    },
+                )
+
+                # Only count a lookup when the router actually decided
+                # external context was necessary.
+                if router_result.get("needs_external"):
+                    external_lookups_used += 1
+
+                legal_context = (
+                    router_result.get("legal_context") or ""
+                ).strip()
+
+                sources = router_result.get("sources") or []
+
+                if legal_context and sources:
+                    clause.legal_context = legal_context
+                    clause.legal_context_sources = sources
+                    ExternalContextCache.objects.update_or_create(
+                        clause_category=cache_category,
+                        jurisdiction=cache_jurisdiction,
+                        defaults={"legal_context": legal_context, "sources": sources},
+                    )
+
+            # Persist all router output in one database operation.
+            if clause_instances:
+                ContractClause.objects.bulk_update(
+                    clause_instances,
+                    [
+                        "legal_context",
+                        "legal_context_sources",
+                    ],
+                )
+
+            # Save governing law if it was extracted.
+            if governing_law:
+                document.save(
+                    update_fields=[
+                        "governing_law",
+                    ]
+                )
+
             risk_weights = {"LOW": 1, "MEDIUM": 2, "HIGH": 3}
             if clause_instances:
                 total_weight = sum(
@@ -1254,21 +1524,21 @@ class DocumentListCreateView(generics.ListCreateAPIView):
 
             serializer = self.get_serializer(document)
             response_data = dict(serializer.data)
-            summary_clauses = [
-                {
-                    "category": clause.category,
-                    "original_text": clause.original_text,
-                    "simplified_text": clause.simplified_text,
-                    "risk_level": clause.risk_level,
-                    "risk_explanation": clause.risk_explanation,
-                }
-                for clause in clause_instances
-            ]
-            summary = self._build_contract_summary(
-                scrubbed_text=scrubbed_text,
-                clauses=summary_clauses,
-                analysis_mode=analysis_mode,
-            )
+            # summary_clauses = [
+            #     {
+            #         "category": clause.category,
+            #         "original_text": clause.original_text,
+            #         "simplified_text": clause.simplified_text,
+            #         "risk_level": clause.risk_level,
+            #         "risk_explanation": clause.risk_explanation,
+            #     }
+            #     for clause in clause_instances
+            # ]
+            # summary = self._build_contract_summary(
+            #     scrubbed_text=scrubbed_text,
+            #     clauses=summary_clauses,
+            #     analysis_mode=analysis_mode,
+            # )
             overall_risk = calculate_overall_risk(summary["critical_clauses"])
             document.overall_risk_score = overall_risk["score"]
             document.save(update_fields=["overall_risk_score"])

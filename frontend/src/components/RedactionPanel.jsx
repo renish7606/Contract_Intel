@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Shield, ChevronDown, ChevronUp, User, Mail, Phone, Building, MapPin, CreditCard, Fingerprint, Globe, Landmark, Hash, MapPinned } from 'lucide-react';
 
 const TYPE_ICONS = {

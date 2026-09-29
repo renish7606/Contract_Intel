@@ -6,7 +6,7 @@ class ContractClauseSerializer(serializers.ModelSerializer):
     """Serializes individual machine-learning classified clauses."""
     class Meta:
         model = ContractClause
-        fields = ['id', 'category', 'original_text', 'simplified_text', 'risk_level', 'risk_explanation']
+        fields = ['id', 'category', 'original_text', 'simplified_text', 'risk_level', 'risk_explanation', 'legal_context', 'legal_context_sources']
 
 class DocumentSerializer(serializers.ModelSerializer):
     """Serializes the full document along with all its classified clauses."""

@@ -5,6 +5,7 @@ import RedactionPanel from '../components/RedactionPanel.jsx';
 import SummaryCard from '../components/SummaryCard.jsx';
 import ComparisonResult from '../components/ComparisonResult.jsx';
 import ErrorBoundary from '../components/ErrorBoundary.jsx';
+import LegalContextBox from '../components/LegalContextBox.jsx';
 
 /**
  * ClauseCard — renders a single clause in the detailed clause-by-clause view.
@@ -69,6 +70,13 @@ function ClauseCard({ clause, idx, isActive, setActive }) {
           </p>
         )}
       </div>
+
+      {clause.legal_context && (
+        <LegalContextBox
+          text={clause.legal_context}
+          sources={clause.legal_context_sources}
+        />
+      )}
 
       <div className="border-t border-dashed border-gray-100 pt-2 flex items-center justify-between text-[10px] text-gray-400">
         <span className={`flex items-center gap-1 px-2 py-0.5 rounded-full border font-semibold ${riskBadgeStyle[clause.risk_level] || riskBadgeStyle.LOW}`}>

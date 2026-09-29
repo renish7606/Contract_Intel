@@ -47,5 +47,33 @@ class ContractClause(models.Model):
     risk_level = models.CharField(max_length=10, choices=RISK_CHOICES, default='LOW')
     risk_explanation = models.TextField(blank=True, null=True)
 
+    legal_context = models.TextField(
+        null=True,
+        blank=True,
+    )
+
+    legal_context_sources = models.JSONField(
+        null=True,
+        blank=True,
+    )
+
     def __str__(self):
         return f"{self.document.title} - {self.category} ({self.risk_level})"
+
+
+class ExternalContextCache(models.Model):
+    """Cached legal-context enrichment keyed by clause type and jurisdiction."""
+    clause_category = models.CharField(max_length=100)
+    jurisdiction = models.CharField(max_length=200)
+    legal_context = models.TextField()
+    sources = models.JSONField(default=list)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["clause_category", "jurisdiction"],
+                name="unique_external_context_category_jurisdiction",
+            )
+        ]

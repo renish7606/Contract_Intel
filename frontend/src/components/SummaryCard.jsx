@@ -100,6 +100,11 @@ export default function SummaryCard({ data }) {
       : fallbackImportantClauses
   )
     .filter((clause) => ['HIGH', 'MEDIUM'].includes(clause.risk_level))
+    .filter((clause, index, all) => all.findIndex((item) => (
+      item.name.trim().toLowerCase() === clause.name.trim().toLowerCase()
+      && item.risk_level === clause.risk_level
+      && item.risk_score === clause.risk_score
+    )) === index)
     .slice(0, 5);
   const uniqueStandardCategories = Array.from(
     new Set(standardClauses.map((clause) => clause.category)),

@@ -15,3 +15,6 @@ psycopg2-binary==2.9.10
 dj-database-url==2.3.0
 whitenoise==6.9.0
 click>=8.1.0
+langgraph
+langchain-google-genai
+tavily-python
